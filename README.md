@@ -30,8 +30,8 @@ omarchy bar move tenzin.auto-workspace --section left
 Tips:
 - Multiple apps on same workspace → they tile/float per Hyprland layout.
 - Use filter box to pick from installed `.desktop` apps quickly.
-- Per-workspace launch is `hyprctl dispatch exec "[workspace N silent] <cmd>"` — doesn't steal focus from your current workspace.
-- Toggle **Enabled** / **Once per boot** in panel header.
+- Per-workspace launch is `hyprctl eval 'hl.exec_cmd("[workspace N silent] <cmd>")'` — doesn't steal focus.
+- **Launch timing is now per-app by type:** `Web App` (Chromium zygote) defaults to `Once per boot` (no duplicate on rescan), `App` (native foot/ghostty/code) defaults to `Every restart` (closed windows come back), `Custom` defaults to `Once per boot`. Change via `Once/Every` toggle per row or `Launch: Once per boot / Every restart` when adding.
 
 ## Config
 
@@ -47,7 +47,8 @@ Tips:
     "onlyOnBoot": true
   },
   "assignments": [
-    { "id": "aw-...", "workspace": 1, "name": "YouTube", "command": "https://youtube.com", "exec": "omarchy-launch-webapp 'https://youtube.com'", "type": "webapp", "enabled": true }
+    { "id": "aw-...", "workspace": 1, "name": "YouTube", "command": "https://youtube.com", "exec": "omarchy-launch-webapp 'https://youtube.com'", "type": "webapp", "enabled": true, "onlyOnBoot": true },
+    { "id": "aw-...", "workspace": 2, "name": "Foot", "command": "foot --app-id=foot-work", "exec": "foot --app-id=foot-work", "type": "app", "enabled": true, "onlyOnBoot": false }
   ]
 }
 ```

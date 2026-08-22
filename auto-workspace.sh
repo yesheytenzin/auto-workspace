@@ -157,23 +157,14 @@ cmd_launch_all() {
     exit 0
   fi
 
-  # onlyOnBoot check: compare boot id
-  local only_on_boot
-  only_on_boot=$(jq -r '.settings.onlyOnBoot // true' "$CONFIG_FILE")
+  # boot_id for per-item once-per-boot gating (type-based defaults handled in Model.js)
+  local only_on_boot_global
+  only_on_boot_global=$(jq -r '.settings.onlyOnBoot // true' "$CONFIG_FILE")
   local boot_id
   boot_id=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || echo "unknown")
   local last_boot_file="$STATE_DIR/last_boot_id"
-  if [[ "$only_on_boot" == "true" && "$force" != "true" ]]; then
-    if [[ -f "$last_boot_file" ]]; then
-      local last_boot
-      last_boot=$(cat "$last_boot_file" 2>/dev/null)
-      if [[ "$last_boot" == "$boot_id" ]]; then
-        # Also check if hyprctl clients already has windows for these workspaces? still skip to avoid duplicate
-        echo "already launched this boot ($boot_id), skipping (use --force)"
-        exit 0
-      fi
-    fi
-  fi
+  local last_boot=""
+  [[ -f "$last_boot_file" ]] && last_boot=$(cat "$last_boot_file" 2>/dev/null || echo "")
 
   local stagger silent
   stagger=$(jq -r '.settings.staggerMs // 400' "$CONFIG_FILE")
@@ -195,6 +186,20 @@ cmd_launch_all() {
     name=$(echo "$item" | jq -r '.name // empty')
     if [[ -z "$ws" || -z "$exec_cmd" ]]; then
       echo "skip invalid item: $item" >&2
+      continue
+    fi
+
+    # Per-item once-per-boot (type default: webapp true, app false, custom true via Model.js)
+    local item_only
+    item_only=$(echo "$item" | jq -r 'if has("onlyOnBoot") then .onlyOnBoot else empty end')
+    if [[ -z "$item_only" || "$item_only" == "null" ]]; then
+      item_only="$only_on_boot_global"
+    fi
+    # Normalize to string "true"/"false"
+    if [[ "$item_only" == "1" ]]; then item_only="true"; fi
+    if [[ "$item_only" == "0" ]]; then item_only="false"; fi
+    if [[ "$item_only" == "true" && "$force" != "true" && -n "$last_boot" && "$last_boot" == "$boot_id" ]]; then
+      echo "skip $name on ws $ws — already launched this boot (once per boot)"
       continue
     fi
 

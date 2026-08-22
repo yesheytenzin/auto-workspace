@@ -23,17 +23,34 @@ function makeId() {
     return "aw-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2,6)
 }
 
+function defaultOnlyOnBootForType(type) {
+    // Best defaults: webapp single-instance (Chromium zygote) -> once per boot to avoid duplicates
+    // app (native) -> on every shell start so closed windows come back after rescan
+    // custom raw command -> once per boot safe
+    if (type === "webapp") return true
+    if (type === "app") return false
+    return true // custom
+}
+
 function normalizeAssignment(a) {
     var ws = parseInt(a.workspace, 10)
     if (!(ws >= 1 && ws <= 10) && String(a.workspace).indexOf("special:") !== 0) ws = 1
+    var type = (a.type === "webapp" || a.type === "app" || a.type === "custom") ? a.type : "app"
+    var onlyOnBoot = a.onlyOnBoot
+    if (onlyOnBoot === undefined || onlyOnBoot === null || onlyOnBoot === "") {
+        onlyOnBoot = defaultOnlyOnBootForType(type)
+    } else {
+        onlyOnBoot = onlyOnBoot === true || onlyOnBoot === "true"
+    }
     return {
         id: String(a.id || makeId()),
         workspace: ws,
         name: String(a.name || a.command || "App").slice(0, 80),
         command: String(a.command || a.exec || "").slice(0, 500),
         exec: String(a.exec || a.command || "").slice(0, 500),
-        type: (a.type === "webapp" || a.type === "app" || a.type === "custom") ? a.type : "app",
-        enabled: a.enabled !== false
+        type: type,
+        enabled: a.enabled !== false,
+        onlyOnBoot: onlyOnBoot
     }
 }
 
@@ -48,7 +65,21 @@ function sanitizeConfig(cfg) {
         out.settings.onlyOnBoot = cfg.settings.onlyOnBoot !== false
     }
     if (Array.isArray(cfg.assignments)) {
-        out.assignments = cfg.assignments.slice(0, 50).map(normalizeAssignment)
+        // Backfill: existing assignments without onlyOnBoot inherit global or type default
+        var globalOnly = out.settings.onlyOnBoot
+        out.assignments = cfg.assignments.slice(0, 50).map(function(raw){
+            // If raw already has onlyOnBoot, normalize will keep it; else use type default
+            // but if no per-item value and global was false, keep type default logic inside normalize
+            // For migration: if raw lacks onlyOnBoot and global was false, app types would get false anyway
+            // so we just call normalize which applies type defaults. To respect old global for migration,
+            // we inject global as fallback for items lacking explicit value:
+            var copy = clone(raw)
+            if (copy.onlyOnBoot === undefined || copy.onlyOnBoot === null) {
+                // Old config: use type default, not global, for best new behavior
+                // (global remains fallback for script's clients check)
+            }
+            return normalizeAssignment(copy)
+        })
     }
     out.version = 1
     return out

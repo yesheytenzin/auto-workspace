@@ -38,6 +38,9 @@ Panel {
     property string formCommand: ""
     property string formType: "app" // app | webapp | custom
     property string formExecPreview: ""
+    property bool formOnlyOnBoot: false // type default: webapp true, app false, custom true (set on show/type change)
+    onFormTypeChanged: if (showAddForm) formOnlyOnBoot = Model.defaultOnlyOnBootForType(formType)
+    onShowAddFormChanged: if (showAddForm) formOnlyOnBoot = Model.defaultOnlyOnBootForType(formType)
 
     function open() { root.controller.show(); loadConfig() }
     function close() { root.controller.hide() }
@@ -98,12 +101,13 @@ Panel {
             command: cmd,
             exec: execStr,
             type: formType,
-            enabled: true
+            enabled: true,
+            onlyOnBoot: formOnlyOnBoot
         })
         assignments = assignments.concat([item])
         config.assignments = assignments.slice()
         // reset form
-        formName = ""; formCommand = ""; formType = "app"; formWorkspace = 1
+        formName = ""; formCommand = ""; formType = "app"; formWorkspace = 1; formOnlyOnBoot = Model.defaultOnlyOnBootForType("app")
         showAddForm = false
         saveConfig()
         statusText = "Added " + item.name + " → WS" + item.workspace
@@ -125,6 +129,17 @@ Panel {
         })
         config.assignments = assignments.slice()
         saveConfig()
+    }
+
+    function toggleOnlyOnBoot(id) {
+        assignments = assignments.map(function(a){
+            if (a.id === id) { var b = Model.clone(a); b.onlyOnBoot = !a.onlyOnBoot; return b }
+            return a
+        })
+        config.assignments = assignments.slice()
+        saveConfig()
+        statusText = "Updated launch timing"
+        clearStatusTimer.restart()
     }
 
     function launchAll(force) {
@@ -448,6 +463,12 @@ Panel {
                                     tooltipText: "Enable/disable this rule"
                                 }
                                 Button {
+                                    text: modelData.onlyOnBoot ? "once" : "every"
+                                    selected: modelData.onlyOnBoot
+                                    onClicked: root.toggleOnlyOnBoot(modelData.id)
+                                    tooltipText: modelData.onlyOnBoot ? "Once per boot (no duplicate on rescan)" : "On every shell restart (resilient)"
+                                }
+                                Button {
                                     text: "↗"
                                     onClicked: {
                                         // test launch single
@@ -558,6 +579,25 @@ Panel {
                         Text {
                             text: root.formType === "webapp" ? "URL → omarchy-launch-webapp" : root.formType === "app" ? ".desktop Exec" : "raw command"
                             color: Qt.darker(root.barForeground, 1.3)
+                            font.family: Style.font.family
+                            font.pixelSize: Style.font.caption
+                        }
+                    }
+
+                    // Launch timing (type default: webapp once, app every, custom once)
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: Style.space(8)
+                        Text { text: "Launch"; color: root.barForeground; font.family: Style.font.family; font.pixelSize: Style.font.caption; Layout.preferredWidth: 80 }
+                        Button {
+                            text: root.formOnlyOnBoot ? "Once per boot" : "Every restart"
+                            selected: root.formOnlyOnBoot
+                            onClicked: root.formOnlyOnBoot = !root.formOnlyOnBoot
+                            tooltipText: root.formOnlyOnBoot ? "Only first time after boot (no duplicate on rescan)" : "On every shell start (if closed, comes back on rescan)"
+                        }
+                        Text {
+                            text: root.formOnlyOnBoot ? "once" : "every — resilient"
+                            color: Qt.darker(root.barForeground, 1.4)
                             font.family: Style.font.family
                             font.pixelSize: Style.font.caption
                         }
