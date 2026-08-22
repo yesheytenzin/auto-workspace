@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "yesheytenzin.auto-workspace",
+  "name": "Auto Workspace",
+  "version": "1.0.0",
+  "author": "yesheytenzin",
+  "license": "MIT",
+  "description": "Auto-launch apps on workspaces at boot — assign YouTube to WS1, Code to WS2, etc. Supports multiple apps per workspace.",
+  "kinds": ["service", "bar-widget"],
+  "entryPoints": {
+    "service": "Service.qml",
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Auto Workspace",
+    "description": "Auto-launch apps on workspaces at startup",
+    "category": "Compositor",
+    "allowMultiple": false,
+    "defaultSection": "left"
+  }
+}
