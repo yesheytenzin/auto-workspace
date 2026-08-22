@@ -8,7 +8,7 @@ import "Model.js" as Model
 
 Panel {
     id: root
-    moduleName: "yesheytenzin.auto-workspace"
+    moduleName: "tenzin.auto-workspace"
     manageIpc: false
 
     property var anchorItem: null
@@ -16,7 +16,7 @@ Panel {
 
     readonly property string home: Quickshell.env("HOME")
     readonly property string configHome: Quickshell.env("XDG_CONFIG_HOME") || home + "/.config"
-    readonly property string pluginId: "yesheytenzin.auto-workspace"
+    readonly property string pluginId: "tenzin.auto-workspace"
     readonly property string configFile: configHome + "/omarchy/plugins/" + pluginId + "/config.json"
     readonly property string script: home + "/.config/omarchy/plugins/" + pluginId + "/auto-workspace.sh"
 
@@ -189,7 +189,7 @@ Panel {
 
     Process {
         id: refreshServiceProc
-        command: ["bash", "-c", "omarchy-shell -q yesheytenzin.auto-workspace refreshConfig >/dev/null 2>&1 || true; omarchy-shell -q yesheytenzin.auto-workspace status >/dev/null 2>&1 || true"]
+        command: ["bash", "-c", "omarchy-shell -q tenzin.auto-workspace refreshConfig >/dev/null 2>&1 || true; omarchy-shell -q tenzin.auto-workspace status >/dev/null 2>&1 || true"]
     }
 
     Process {

@@ -6,12 +6,12 @@ import qs.Ui
 
 BarWidget {
     id: root
-    moduleName: "yesheytenzin.auto-workspace"
+    moduleName: "tenzin.auto-workspace"
 
     implicitWidth: button.implicitWidth
     implicitHeight: button.implicitHeight
 
-    readonly property string pluginId: "yesheytenzin.auto-workspace"
+    readonly property string pluginId: "tenzin.auto-workspace"
     readonly property string home: Quickshell.env("HOME")
     readonly property string configHome: Quickshell.env("XDG_CONFIG_HOME") || home + "/.config"
     readonly property string configFile: configHome + "/omarchy/plugins/" + pluginId + "/config.json"

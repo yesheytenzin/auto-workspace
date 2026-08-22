@@ -9,7 +9,7 @@ Item {
 
     // Injected by shell — keep for compatibility (even if not used by service)
     property QtObject bar: null
-    property string moduleName: "yesheytenzin.auto-workspace"
+    property string moduleName: "tenzin.auto-workspace"
     property var settings: ({})
     property var shell: null
     property var manifest: null
@@ -17,7 +17,7 @@ Item {
     readonly property string home: Quickshell.env("HOME")
     readonly property string configHome: Quickshell.env("XDG_CONFIG_HOME") || home + "/.config"
     readonly property string stateHome: Quickshell.env("XDG_STATE_HOME") || home + "/.local/state"
-    readonly property string pluginId: "yesheytenzin.auto-workspace"
+    readonly property string pluginId: "tenzin.auto-workspace"
     readonly property string script: home + "/.config/omarchy/plugins/" + pluginId + "/auto-workspace.sh"
     readonly property string configFile: configHome + "/omarchy/plugins/" + pluginId + "/config.json"
 

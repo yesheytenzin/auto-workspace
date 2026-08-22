@@ -9,12 +9,12 @@ Assign YouTube to workspace 1 so it always opens there, put Code + Terminal on w
 ```sh
 omarchy plugin add https://github.com/yesheytenzin/auto-workspace.git --enable
 # or manual drop-in for dev:
-mkdir -p ~/.config/omarchy/plugins/yesheytenzin.auto-workspace
-cp -r /path/to/auto_workspace/* ~/.config/omarchy/plugins/yesheytenzin.auto-workspace/
+mkdir -p ~/.config/omarchy/plugins/tenzin.auto-workspace
+cp -r /path/to/auto_workspace/* ~/.config/omarchy/plugins/tenzin.auto-workspace/
 omarchy-shell shell rescanPlugins
-omarchy plugin enable yesheytenzin.auto-workspace
+omarchy plugin enable tenzin.auto-workspace
 # bar widget appears in left section; move if desired:
-omarchy bar move yesheytenzin.auto-workspace --section left
+omarchy bar move tenzin.auto-workspace --section left
 ```
 
 ## Usage
@@ -24,7 +24,7 @@ omarchy bar move yesheytenzin.auto-workspace --section left
    - **App** — `.desktop` Exec like `code`, `spotify`, `foot`, `chromium`
    - **Web App** — URL like `https://youtube.com` (uses `omarchy-launch-webapp`)
    - **Custom** — raw command as-is
-3. **Add to WS** — saved to `~/.config/omarchy/plugins/yesheytenzin.auto-workspace/config.json`.
+3. **Add to WS** — saved to `~/.config/omarchy/plugins/tenzin.auto-workspace/config.json`.
 4. Click **Launch all** to test now, or `↗` on a single rule. On next boot/login it launches automatically.
 
 Tips:
@@ -35,7 +35,7 @@ Tips:
 
 ## Config
 
-`~/.config/omarchy/plugins/yesheytenzin.auto-workspace/config.json`:
+`~/.config/omarchy/plugins/tenzin.auto-workspace/config.json`:
 ```json
 {
   "version": 1,
@@ -54,7 +54,7 @@ Tips:
 
 ## CLI
 
-Helper script at `~/.config/omarchy/plugins/yesheytenzin.auto-workspace/auto-workspace.sh`:
+Helper script at `~/.config/omarchy/plugins/tenzin.auto-workspace/auto-workspace.sh`:
 
 ```sh
 auto-workspace.sh --status
@@ -62,9 +62,9 @@ auto-workspace.sh --list-apps
 auto-workspace.sh --launch 1 "chromium --app=https://youtube.com"
 auto-workspace.sh --launch-all
 auto-workspace.sh --force-launch-all
-omarchy-shell -q yesheytenzin.auto-workspace launchAll
-omarchy-shell -q yesheytenzin.auto-workspace forceLaunchAll
-omarchy-shell -q yesheytenzin.auto-workspace status
+omarchy-shell -q tenzin.auto-workspace launchAll
+omarchy-shell -q tenzin.auto-workspace forceLaunchAll
+omarchy-shell -q tenzin.auto-workspace status
 ```
 
 ## How it works
@@ -75,8 +75,8 @@ omarchy-shell -q yesheytenzin.auto-workspace status
 ## Remove
 
 ```sh
-omarchy plugin remove yesheytenzin.auto-workspace
-rm -rf ~/.config/omarchy/plugins/yesheytenzin.auto-workspace ~/.local/state/omarchy/auto-workspace
+omarchy plugin remove tenzin.auto-workspace
+rm -rf ~/.config/omarchy/plugins/tenzin.auto-workspace ~/.local/state/omarchy/auto-workspace
 ```
 
 ## License

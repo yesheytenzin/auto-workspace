@@ -1,7 +1,7 @@
 #!/bin/bash
 set -uo pipefail
 
-PLUGIN_ID="yesheytenzin.auto-workspace"
+PLUGIN_ID="tenzin.auto-workspace"
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/plugins/$PLUGIN_ID"
 CONFIG_FILE="$CONFIG_DIR/config.json"
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/auto-workspace"
@@ -236,7 +236,7 @@ case "${1:-}" in
   --force-launch-all) cmd_launch_all "true" ;;
   --default-config) default_config ;;
   --help|-h|"") cat <<'HELP'
-auto-workspace.sh — helper for yesheytenzin.auto-workspace
+auto-workspace.sh — helper for tenzin.auto-workspace
 
   --ensure-config         ensure config exists and print it
   --list-apps             list .desktop apps as TSV (name exec icon file)
