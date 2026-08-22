@@ -72,6 +72,14 @@ omarchy-shell -q tenzin.auto-workspace status
 - `Service.qml` (kind `service`) runs on shell start (`Component.onCompleted`). It ensures config exists, then after `launchDelayMs` spawns `auto-workspace.sh --launch-all` via `Process`. Respects `onlyOnBoot` by remembering `/proc/sys/kernel/random/boot_id` in `~/.local/state/omarchy/auto-workspace/last_boot_id` and dedups against `hyprctl clients -j`.
 - `BarWidget.qml` + `Panel.qml` (kind `bar-widget`) provides the management UI. No sudo, no network.
 
+## Update
+
+```sh
+omarchy plugin update tenzin.auto-workspace
+# update all plugins
+omarchy plugin update
+```
+
 ## Remove
 
 ```sh
