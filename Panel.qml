@@ -31,6 +31,9 @@ Panel {
     property var appList: [] // {name, exec, icon}
     property string appFilter: ""
     property bool showAddForm: false
+    property var expandedWs: ({}) // ws -> bool
+    property string draggedId: ""
+    property string draggedSourceWs: ""
 
     // form fields
     property int formWorkspace: 1
@@ -140,6 +143,63 @@ Panel {
         saveConfig()
         statusText = "Updated launch timing"
         clearStatusTimer.restart()
+    }
+
+    function isExpanded(ws) { return expandedWs[ws] === true }
+    function toggleExpanded(ws) {
+        var n = {}
+        for (var k in expandedWs) n[k] = expandedWs[k]
+        n[ws] = !n[ws]
+        expandedWs = n
+        if (n[ws] && appList.length===0) appsProc.running = true
+    }
+    function getAppsForWs(ws) {
+        var out=[]
+        for (var i=0;i<assignments.length;i++) if (assignments[i].workspace===ws) out.push(assignments[i])
+        return out
+    }
+    function moveAssignment(id, targetWs, targetIndex) {
+        var idx=-1; var item=null
+        for (var i=0;i<assignments.length;i++) if (assignments[i].id===id) { idx=i; item=assignments[i]; break }
+        if (idx===-1 || !item) return
+        // remove
+        var newList = assignments.slice()
+        newList.splice(idx,1)
+        // find insertion point for targetWs at targetIndex within that WS group
+        var countInTarget=-1
+        var insertAt=newList.length
+        for (var j=0;j<newList.length;j++) {
+            if (newList[j].workspace===targetWs) {
+                countInTarget++
+                if (countInTarget===targetIndex) { insertAt=j; break }
+            }
+        }
+        // if targetIndex beyond current count, append after last of that WS or at end
+        if (targetIndex !== 0 && countInTarget < targetIndex) {
+            // find last of targetWs
+            var last=-1
+            for (var k=newList.length-1;k>=0;k--) if (newList[k].workspace===targetWs) { last=k; break }
+            if (last!==-1) insertAt=last+1
+            else {
+                // no existing in target, find position sorted by WS (keep WS order 1-10)
+                insertAt=newList.length
+                for (var p=0;p<newList.length;p++) if (newList[p].workspace>targetWs) { insertAt=p; break }
+            }
+        }
+        var moved = Model.clone(item)
+        moved.workspace = targetWs
+        newList.splice(insertAt,0,moved)
+        assignments = newList
+        config.assignments = newList.slice()
+        saveConfig()
+        statusText = "Moved " + moved.name + " → WS" + targetWs
+        clearStatusTimer.restart()
+        // if live window exists, move it too
+        var liveAddr=""
+        // we could query live clients, but do async move via script
+        var proc = Qt.createQmlObject('import Quickshell.Io; Process {}', root)
+        proc.command = ["bash","-c","addr=$(hyprctl clients -j 2>/dev/null | jq -r --arg id \""+id+"\" --arg name \""+moved.name.replace(/\"/g,'')+"\" \'.[] | select(.class|test($name;\"i\") or .title|test($name;\"i\")) | .address\' | head -n1); [[ -n \"$addr\" ]] && hyprctl eval \"hl.dsp.window.move({workspace=\\\""+targetWs+"\\\", window=\\\"address:$addr\\\", follow:false})\" >/dev/null 2>&1 || true"]
+        proc.running = true
     }
 
     function launchAll(force) {
@@ -260,9 +320,10 @@ Panel {
         owner: root.hostWidget || root
         bar: root.bar
         open: root.opened
+        centerOnBar: true
         focusTarget: keyCatcher
-        contentWidth: panel.fittedContentWidth(Style.space(560))
-        contentHeight: panel.fittedContentHeight(content.implicitHeight)
+        contentWidth: panel.fittedContentWidth(Style.space(720))
+        contentHeight: panel.fittedContentHeight(content.implicitHeight, Style.space(620))
 
         PanelKeyCatcher {
             id: keyCatcher
@@ -396,100 +457,162 @@ Panel {
                     wrapMode: Text.WordWrap
                 }
 
-                // List
+                // Workspaces grouped (1-10) with preview
                 ColumnLayout {
                     Layout.fillWidth: true
-                    spacing: Style.space(6)
-                    visible: root.assignments.length>0
+                    spacing: Style.space(10)
                     Repeater {
-                        model: root.assignments
+                        model: 10
                         delegate: Rectangle {
-                            required property var modelData
                             required property int index
+                            property int ws: index + 1
+                            property var appsForWs: root.getAppsForWs(ws)
+                            property bool expanded: root.isExpanded(ws)
                             Layout.fillWidth: true
-                            implicitHeight: row.implicitHeight + Style.space(10)
+                            implicitHeight: wsCol.implicitHeight + Style.space(12)
                             radius: Style.cornerRadius
-                            color: modelData.enabled ? Qt.rgba(Color.foreground.r, Color.foreground.g, Color.foreground.b, 0.05) : Qt.rgba(Color.foreground.r, Color.foreground.g, Color.foreground.b, 0.02)
-                            border.width: 1
-                            border.color: Qt.rgba(Color.foreground.r, Color.foreground.g, Color.foreground.b, modelData.enabled ? 0.12 : 0.06)
-                            RowLayout {
-                                id: row
+                            color: expanded ? Qt.rgba(Color.foreground.r, Color.foreground.g, Color.foreground.b, 0.04) : "transparent"
+                            border.width: expanded ? 1 : 0
+                            border.color: Qt.rgba(Color.foreground.r, Color.foreground.g, Color.foreground.b, 0.08)
+
+                            ColumnLayout {
+                                id: wsCol
                                 anchors.fill: parent
                                 anchors.margins: Style.space(8)
-                                spacing: Style.space(8)
+                                spacing: Style.space(6)
 
-                                Rectangle {
-                                    implicitWidth: 36
-                                    implicitHeight: 28
-                                    radius: 6
-                                    color: modelData.enabled ? Color.accent : Qt.darker(Color.foreground, 1.5)
-                                    Text {
-                                        anchors.centerIn: parent
-                                        text: String(modelData.workspace)
-                                        color: Color.background
-                                        font.family: Style.font.family
-                                        font.pixelSize: Style.font.body
-                                        font.bold: true
-                                    }
-                                }
-
-                                ColumnLayout {
+                                RowLayout {
                                     Layout.fillWidth: true
-                                    spacing: 2
+                                    spacing: Style.space(8)
+                                    Rectangle {
+                                        implicitWidth: 32
+                                        implicitHeight: 26
+                                        radius: 6
+                                        color: appsForWs.length > 0 ? Color.accent : Qt.rgba(Color.foreground.r, Color.foreground.g, Color.foreground.b, 0.12)
+                                        Text {
+                                            anchors.centerIn: parent
+                                            text: String(ws)
+                                            color: appsForWs.length > 0 ? Color.background : Qt.darker(Color.foreground, 1.1)
+                                            font.family: Style.font.family
+                                            font.pixelSize: Style.font.body
+                                            font.bold: true
+                                        }
+                                    }
                                     Text {
-                                        Layout.fillWidth: true
-                                        text: modelData.name || "Unnamed"
-                                        color: modelData.enabled ? root.barForeground : Qt.darker(root.barForeground, 1.4)
+                                        text: appsForWs.length > 0 ? appsForWs.map(function(a){return a.name}).join(" · ") : "Empty"
+                                        color: appsForWs.length > 0 ? root.barForeground : Qt.darker(root.barForeground, 1.4)
                                         font.family: Style.font.family
-                                        font.pixelSize: Style.font.body
-                                        font.bold: true
+                                        font.pixelSize: Style.font.caption
+                                        Layout.fillWidth: true
                                         elide: Text.ElideRight
                                     }
                                     Text {
-                                        Layout.fillWidth: true
-                                        text: modelData.exec || modelData.command
-                                        color: Qt.darker(root.barForeground, 1.35)
-                                        font.family: "monospace"
+                                        text: appsForWs.length + " app" + (appsForWs.length===1?"":"s")
+                                        color: Qt.darker(root.barForeground, 1.3)
+                                        font.family: Style.font.family
                                         font.pixelSize: Style.font.caption - 1
-                                        elide: Text.ElideMiddle
-                                        maximumLineCount: 1
+                                        visible: appsForWs.length>0
+                                    }
+                                    Button {
+                                        text: expanded ? "Hide" : (appsForWs.length>0 ? "Show" : "+ Add")
+                                        onClicked: root.toggleExpanded(ws)
+                                    }
+                                    Button {
+                                        visible: appsForWs.length>0
+                                        text: "↗"
+                                        tooltipText: "Launch all on WS" + ws
+                                        onClicked: {
+                                            for (var i=0;i<appsForWs.length;i++) {
+                                                var p = ["bash", root.script, "--launch", String(ws), appsForWs[i].exec || appsForWs[i].command, "true"]
+                                                singleLaunchProc.command = p
+                                                singleLaunchProc.running = true
+                                            }
+                                            root.statusText = "Launching WS" + ws + "..."
+                                        }
                                     }
                                 }
 
-                                Button {
-                                    text: modelData.enabled ? "on" : "off"
-                                    selected: modelData.enabled
-                                    onClicked: root.toggleEnabled(modelData.id)
-                                    tooltipText: "Enable/disable this rule"
-                                }
-                                Button {
-                                    text: modelData.onlyOnBoot ? "once" : "every"
-                                    selected: modelData.onlyOnBoot
-                                    onClicked: root.toggleOnlyOnBoot(modelData.id)
-                                    tooltipText: modelData.onlyOnBoot ? "Once per boot (no duplicate on rescan)" : "On every shell restart (resilient)"
-                                }
-                                Button {
-                                    text: "↗"
-                                    onClicked: {
-                                        // test launch single
-                                        var p = ["bash", root.script, "--launch", String(modelData.workspace), modelData.exec || modelData.command, "true"]
-                                        // use manual proc? quick one-off
-                                        singleLaunchProc.command = p
-                                        singleLaunchProc.running = true
-                                        root.statusText = "Launching " + modelData.name + "..."
+                                // Preview — mock dwindle, supports drag to move
+                                WorkspacePreview {
+                                    Layout.fillWidth: true
+                                    visible: expanded || appsForWs.length>0
+                                    workspace: ws
+                                    assignedApps: appsForWs
+                                    draggedIdGlobal: root.draggedId
+                                    onDropRequest: function(draggedId, targetWs, targetIndex) {
+                                        root.moveAssignment(draggedId, targetWs, targetIndex)
                                     }
-                                    tooltipText: "Launch this one now"
+                                    onDragStarted: function(id){ root.draggedId = id }
+                                    onDragEnded: function(){ root.draggedId = "" }
                                 }
-                                Button {
-                                    text: "✕"
-                                    onClicked: root.removeAssignment(modelData.id)
-                                    tooltipText: "Remove"
+
+                                // Detailed list when expanded
+                                ColumnLayout {
+                                    visible: expanded
+                                    Layout.fillWidth: true
+                                    spacing: 4
+                                    Repeater {
+                                        model: appsForWs
+                                        delegate: Rectangle {
+                                            required property var modelData
+                                            Layout.fillWidth: true
+                                            implicitHeight: 36
+                                            radius: 6
+                                            color: Qt.rgba(Color.foreground.r, Color.foreground.g, Color.foreground.b, 0.03)
+                                            border.width: 1
+                                            border.color: Qt.rgba(Color.foreground.r, Color.foreground.g, Color.foreground.b, 0.06)
+                                            RowLayout {
+                                                anchors.fill: parent
+                                                anchors.margins: Style.space(6)
+                                                spacing: 6
+                                                Text {
+                                                    text: modelData.name
+                                                    color: root.barForeground
+                                                    font.family: Style.font.family
+                                                    font.pixelSize: Style.font.caption
+                                                    Layout.fillWidth: true
+                                                    elide: Text.ElideRight
+                                                }
+                                                Text {
+                                                    text: (modelData.onlyOnBoot ? "once" : "every")
+                                                    color: modelData.onlyOnBoot ? Color.accent : Qt.darker(Color.foreground, 1.2)
+                                                    font.family: Style.font.family
+                                                    font.pixelSize: Style.font.caption - 2
+                                                }
+                                                Button {
+                                                    text: modelData.enabled ? "on" : "off"
+                                                    selected: modelData.enabled
+                                                    onClicked: root.toggleEnabled(modelData.id)
+                                                }
+                                                Button {
+                                                    text: "✕"
+                                                    onClicked: root.removeAssignment(modelData.id)
+                                                }
+                                            }
+                                            // Drag handle for this row to move between WS via preview
+                                            MouseArea {
+                                                anchors.fill: parent
+                                                drag.threshold: 6
+                                                onPressed: root.draggedId = modelData.id
+                                                onReleased: root.draggedId = ""
+                                            }
+                                        }
+                                    }
+                                    Button {
+                                        Layout.alignment: Qt.AlignLeft
+                                        text: "+ Add app to WS" + ws
+                                        onClicked: {
+                                            root.formWorkspace = ws
+                                            root.formOnlyOnBoot = Model.defaultOnlyOnBootForType(root.formType)
+                                            root.showAddForm = true
+                                        }
+                                    }
                                 }
                             }
                         }
                     }
 
-                    // single launch helper
+                    // single launch helper (shared)
                     Process {
                         id: singleLaunchProc
                         stdout: SplitParser { onRead: function(d){ root.statusText = d.slice(0,80) } }

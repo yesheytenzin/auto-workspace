@@ -28,7 +28,9 @@ omarchy bar move tenzin.auto-workspace --section left
 4. Click **Launch all** to test now, or `↗` on a single rule. On next boot/login it launches automatically.
 
 Tips:
-- Multiple apps on same workspace → they tile/float per Hyprland layout.
+- Centered panel: icon may be left/center/right — panel always opens centered (`centerOnBar: true`, 720 wide) for a full workspace overview.
+- **Workspace list (1-10):** each WS shows count, assigned apps, and a live preview. Expand a WS to see its apps, drag tiles to reorder launch order or drag between workspaces to move assignments — preview updates live (dwindle mock for 1-4 apps, grid for >4). Live windows (from `hyprctl clients -j`) move silently via `hl.dsp.window.move` when you drag.
+- Multiple apps on same workspace → they tile/float per Hyprland layout. Preview shows how they'd tile (50/50 for 2, etc.).
 - Use filter box to pick from installed `.desktop` apps quickly.
 - Per-workspace launch is `hyprctl eval 'hl.exec_cmd("[workspace N silent] <cmd>")'` — doesn't steal focus.
 - **Launch timing is now per-app by type:** `Web App` (Chromium zygote) defaults to `Once per boot` (no duplicate on rescan), `App` (native foot/ghostty/code) defaults to `Every restart` (closed windows come back), `Custom` defaults to `Once per boot`. Change via `Once/Every` toggle per row or `Launch: Once per boot / Every restart` when adding.
