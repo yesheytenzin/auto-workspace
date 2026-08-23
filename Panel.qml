@@ -363,7 +363,7 @@ Panel {
                 width: parent.width
                 spacing: Style.space(10)
 
-                // Header
+                // Header — 1.3.0 centered with live preview
                 RowLayout {
                     Layout.fillWidth: true
                     spacing: Style.space(8)
@@ -375,6 +375,21 @@ Panel {
                         font.bold: true
                         Layout.fillWidth: true
                     }
+                    Rectangle {
+                        implicitHeight: 18
+                        implicitWidth: verText.implicitWidth + 10
+                        radius: 9
+                        color: Color.accent
+                        Text {
+                            id: verText
+                            anchors.centerIn: parent
+                            text: "1.3.0 centered"
+                            color: "white"
+                            font.family: Style.font.family
+                            font.pixelSize: Style.font.caption - 2
+                            font.bold: true
+                        }
+                    }
                     Text {
                         text: root.assignments.length + " rules • " + root.assignments.filter(function(a){return a.enabled}).length + " enabled"
                         color: Qt.darker(root.barForeground, 1.2)
@@ -385,7 +400,7 @@ Panel {
 
                 Text {
                     Layout.fillWidth: true
-                    text: "Apps auto-launch on their workspace after boot/login. Multiple apps per workspace supported."
+                    text: "Centered workspace manager — WS 1-10 with live Hypr preview (● live). Drag tiles in preview to reorder or move between workspaces."
                     color: Qt.darker(root.barForeground, 1.25)
                     font.family: Style.font.family
                     font.pixelSize: Style.font.caption
