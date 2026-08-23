@@ -11,7 +11,8 @@ function defaultConfig() {
             launchDelayMs: 800,
             staggerMs: 400,
             silent: true,
-            onlyOnBoot: true
+            onlyOnBoot: true,
+            lastFormWorkspace: 1
         },
         assignments: []
     }
@@ -24,24 +25,14 @@ function makeId() {
 }
 
 function defaultOnlyOnBootForType(type) {
-    // Best defaults: webapp single-instance (Chromium zygote) -> once per boot to avoid duplicates
-    // app (native) -> on every shell start so closed windows come back after rescan
-    // custom raw command -> once per boot safe
-    if (type === "webapp") return true
-    if (type === "app") return false
-    return true // custom
+    return true
 }
 
 function normalizeAssignment(a) {
     var ws = parseInt(a.workspace, 10)
     if (!(ws >= 1 && ws <= 10) && String(a.workspace).indexOf("special:") !== 0) ws = 1
     var type = (a.type === "webapp" || a.type === "app" || a.type === "custom") ? a.type : "app"
-    var onlyOnBoot = a.onlyOnBoot
-    if (onlyOnBoot === undefined || onlyOnBoot === null || onlyOnBoot === "") {
-        onlyOnBoot = defaultOnlyOnBootForType(type)
-    } else {
-        onlyOnBoot = onlyOnBoot === true || onlyOnBoot === "true"
-    }
+    var onlyOnBoot = true
     return {
         id: String(a.id || makeId()),
         workspace: ws,
@@ -63,6 +54,7 @@ function sanitizeConfig(cfg) {
         out.settings.staggerMs = Math.max(0, Math.min(2000, parseInt(cfg.settings.staggerMs) || 400))
         out.settings.silent = cfg.settings.silent !== false
         out.settings.onlyOnBoot = cfg.settings.onlyOnBoot !== false
+        out.settings.lastFormWorkspace = Math.max(1, Math.min(10, parseInt(cfg.settings.lastFormWorkspace) || 1))
     }
     if (Array.isArray(cfg.assignments)) {
         // Backfill: existing assignments without onlyOnBoot inherit global or type default

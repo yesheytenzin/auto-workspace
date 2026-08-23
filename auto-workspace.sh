@@ -2,12 +2,22 @@
 set -uo pipefail
 
 PLUGIN_ID="tenzin.auto-workspace"
-CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/plugins/$PLUGIN_ID"
-CONFIG_FILE="$CONFIG_DIR/config.json"
+# Config lives OUTSIDE the plugin dir: the shell watches the plugin folder and
+# reloads the whole plugin on any file change there, which would close the
+# panel and restart the service on every settings save.
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/auto-workspace"
+CONFIG_FILE="$STATE_DIR/config.json"
+LEGACY_CONFIG_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/plugins/$PLUGIN_ID/config.json"
 STATE_FILE="$STATE_DIR/state.json"
 
-mkdir -p "$CONFIG_DIR" "$STATE_DIR"
+mkdir -p "$STATE_DIR"
+
+migrate_config() {
+  # One-time migration from the old in-plugin-folder location.
+  if [[ ! -f "$CONFIG_FILE" && -f "$LEGACY_CONFIG_FILE" ]]; then
+    cp "$LEGACY_CONFIG_FILE" "$CONFIG_FILE" 2>/dev/null || true
+  fi
+}
 
 default_config() {
   cat <<'JSON'
@@ -18,7 +28,8 @@ default_config() {
     "launchDelayMs": 800,
     "staggerMs": 400,
     "silent": true,
-    "onlyOnBoot": true
+    "onlyOnBoot": true,
+    "lastFormWorkspace": 1
   },
   "assignments": []
 }
@@ -26,6 +37,7 @@ JSON
 }
 
 ensure_config() {
+  migrate_config
   if [[ ! -f "$CONFIG_FILE" ]]; then
     default_config >"$CONFIG_FILE"
   fi
@@ -42,9 +54,27 @@ cmd_ensure_config() {
 }
 
 cmd_list_apps() {
-  # List .desktop apps: Name | Exec | Icon | File
-  # Use jq-like output: name\texec\ticon
+  # List .desktop apps: Name | Exec | Icon | File | Score
+  # Score = rough frecency from shell histories + recently-used.xbel, so the
+  # panel can show commonly used apps first.
   local seen=""
+  # Collect shell history once, then count the leading command words.
+  local hist_txt="" h
+  for h in "$HOME/.bash_history" "$HOME/.zsh_history" "$HOME/.local/share/fish/fish_history"; do
+    [[ -f "$h" ]] || continue
+    hist_txt+="$(cat "$h" 2>/dev/null)"
+    hist_txt+="\n"
+  done
+  local -A tok_count
+  local token count
+  while read -r token count; do
+    [[ -n "$token" ]] && tok_count["$token"]="$count"
+  done < <(awk '{ for (i=1; i<=NF && i<=2; i++) { if ($i ~ /^[a-zA-Z0-9_.+-]+$/ && $i !~ /^[0-9:-]+$/) print tolower($i) } }' < <(printf "%b" "$hist_txt") | sort | uniq -c | awk '{ print $2, $1 }')
+  # recently-used.xbel: app .desktop path -> count
+  local -A xbel_count
+  while read -r count path; do
+    [[ -n "$path" ]] && xbel_count["$path"]="$count"
+  done < <(grep -oE 'file://[^"]+\.desktop' "$HOME/.local/share/recently-used.xbel" 2>/dev/null | sed 's#file://##' | sort | uniq -c | awk '{ print $2, $1 }')
   for dir in "$HOME/.local/share/applications" "/usr/share/applications" "/var/lib/flatpak/exports/share/applications" "$HOME/.local/share/flatpak/exports/share/applications"; do
     [[ -d "$dir" ]] || continue
     while IFS= read -r -d '' file; do
@@ -62,7 +92,27 @@ cmd_list_apps() {
       # dedup by exec
       if [[ "$seen" == *"|$exec_line|"* ]]; then continue; fi
       seen+="|$exec_line|"
-      printf "%s\t%s\t%s\t%s\n" "$name" "$exec_line" "$icon" "$file"
+      local base="${exec_line%% *}"
+      local appname="${base##*/}"
+      local score=0
+      local base_l="${base,,}" appname_l="${appname,,}" nfirst_l="${name%% *}" domain_l=""
+      nfirst_l="${nfirst_l,,}"
+      [[ -n "${tok_count[$base_l]:-}" ]] && score=$(( score + tok_count["$base_l"] ))
+      [[ -n "${tok_count[$appname_l]:-}" ]] && score=$(( score + tok_count["$appname_l"] ))
+      # users also type the app name itself (first word of Name=)
+      [[ -n "${tok_count[$nfirst_l]:-}" ]] && score=$(( score + tok_count["$nfirst_l"] ))
+      # webapps: score by the URL domain too (figma.com → "figma")
+      if [[ "$exec_line" == omarchy-launch-webapp* ]]; then
+        local url="${exec_line#*\'}"; url="${url%%\'*}"
+        if [[ "$url" == http* ]]; then
+          domain_l=$(echo "$url" | sed -E 's#^[a-z]+://([^/:]+).*#\1#' | sed -E 's/^www\.//')
+          domain_l="${domain_l%%.*}"
+          domain_l="${domain_l,,}"
+          [[ -n "${tok_count[$domain_l]:-}" ]] && score=$(( score + tok_count["$domain_l"] ))
+        fi
+      fi
+      [[ -n "${xbel_count[$file]:-}" ]] && score=$(( score + xbel_count["$file"] ))
+      printf "%s\t%s\t%s\t%s\t%s\n" "$name" "$exec_line" "$icon" "$file" "$score"
     done < <(find "$dir" -maxdepth 1 -name "*.desktop" -print0 2>/dev/null)
   done | sort -u -t $'\t' -k1,1
 }

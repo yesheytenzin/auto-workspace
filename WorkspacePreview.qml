@@ -11,6 +11,9 @@ Item {
     property var assignedApps: [] // assignments filtered for this WS
     property var liveClients: [] // optional live hyprctl clients for this WS
     property bool isExpanded: false
+    property int screenW: 0
+    property int screenH: 0
+    readonly property real screenAspect: screenW > 0 && screenH > 0 ? screenH / screenW : 0.5625
 
     implicitWidth: 320
     implicitHeight: previewBox.implicitHeight + 28 + (liveClients && liveClients.length>0 ? 22 : 0)
@@ -45,11 +48,18 @@ Item {
             }
         }
 
-        // Preview box - dwindle mock (assigned) + hypr live overlay maybe
+        // Spacers center the mini screen vertically in whatever room the
+        // column gives it, instead of stretching the aspect ratio.
+        Item { Layout.fillHeight: true; Layout.minimumHeight: 0 }
+
+        // Preview box - dwindle mock, miniaturized to match the user's screen aspect
         Rectangle {
             id: previewBox
             Layout.fillWidth: true
-            implicitHeight: 92
+            Layout.preferredHeight: width > 0 ? Math.round(width * root.screenAspect) : 92
+            Layout.maximumHeight: Layout.preferredHeight
+            Layout.alignment: Qt.AlignHCenter
+            implicitHeight: width > 0 ? Math.round(width * root.screenAspect) : 92
             radius: Style.cornerRadius
             color: Qt.rgba(Color.foreground.r, Color.foreground.g, Color.foreground.b, 0.04)
             border.width: 1
@@ -228,5 +238,8 @@ Item {
                 }
             }
         }
+
+        // Bottom spacer (pairs with the top one) keeps the mini screen centered
+        Item { Layout.fillHeight: true; Layout.minimumHeight: 0 }
     }
 }

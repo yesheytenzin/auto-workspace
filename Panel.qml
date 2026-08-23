@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Controls
 import QtQuick.Layouts
 import Quickshell
 import Quickshell.Io
@@ -16,8 +17,11 @@ Panel {
 
     readonly property string home: Quickshell.env("HOME")
     readonly property string configHome: Quickshell.env("XDG_CONFIG_HOME") || home + "/.config"
+    readonly property string stateHome: Quickshell.env("XDG_STATE_HOME") || home + "/.local/state"
     readonly property string pluginId: "tenzin.auto-workspace"
-    readonly property string configFile: configHome + "/omarchy/plugins/" + pluginId + "/config.json"
+    // Outside the plugin dir: the shell reloads the plugin on any file change there
+    readonly property string configFile: stateHome + "/omarchy/auto-workspace/config.json"
+    readonly property string legacyConfigFile: configHome + "/omarchy/plugins/" + pluginId + "/config.json"
     readonly property string script: home + "/.config/omarchy/plugins/" + pluginId + "/auto-workspace.sh"
 
     signal countsChanged()
@@ -31,14 +35,33 @@ Panel {
     property string appFilter: ""
     property bool adding: false
     property int formWorkspace: 1
+    property bool workspacePicked: false
     property string formName: ""
     property string formCommand: ""
     property string formType: "app"
     property string formExecPreview: ""
-    property bool formOnlyOnBoot: false
-    onFormTypeChanged: { formOnlyOnBoot = Model.defaultOnlyOnBootForType(formType); updateFormPreview() }
+    property bool formNameEdited: false
+    property string autoName: ""
+    property bool fillingName: false
+    onFormTypeChanged: { updateFormPreview(); updateAutofillName() }
 
-    function open() { root.controller.show(); loadConfig() }
+    // --- keyboard cursor model (plugin-manager pattern) ---
+    property bool cursorActive: false
+    property int selectedRow: 0
+    property int selectedButton: 0
+
+    readonly property color foreground: root.barForeground
+    readonly property color dim: Qt.rgba(root.barForeground.r, root.barForeground.g, root.barForeground.b, 0.55)
+    readonly property string fontFamily: Style.font.family
+
+    readonly property int totalCount: assignments.length
+    readonly property int enabledCount: (function(){
+        var n = 0
+        for (var i = 0; i < assignments.length; i++) if (assignments[i].enabled !== false) n++
+        return n
+    })()
+
+    function open() { root.controller.show(); loadConfig(); root.workspacePicked = true }
     function close() { root.controller.hide() }
     function toggle() { root.opened ? root.close() : root.open() }
     function closeForPopoutSwitch() { root.close() }
@@ -61,7 +84,9 @@ Panel {
             cfg.assignments[i]=a
         }
         config=cfg; assignments=cfg.assignments.slice()
-        saveProc.jsonText = JSON.stringify(cfg,null,2)
+        saveProc.pendingJson = JSON.stringify(cfg,null,2)
+        if (saveProc.running) { saveProc.wantsSave = true; return }
+        saveProc.command=["bash","-c","mkdir -p \"$(dirname \"$1\")\"; printf '%s' \"$2\" > \"$1\"; cat \"$1\" | jq empty && echo OK || echo FAIL", "_", root.configFile, saveProc.pendingJson]
         saveProc.running=true
     }
     function addAssignment() {
@@ -74,9 +99,9 @@ Panel {
         var execStr=cmd
         if (formType==="webapp" && (cmd.indexOf("http://")===0 || cmd.indexOf("https://")===0))
             execStr="omarchy-launch-webapp '" + cmd.replace(/'/g,"'\\''") + "'"
-        var item=Model.normalizeAssignment({workspace:formWorkspace, name:name, command:cmd, exec:execStr, type:formType, enabled:true, onlyOnBoot:formOnlyOnBoot})
+        var item=Model.normalizeAssignment({workspace:formWorkspace, name:name, command:cmd, exec:execStr, type:formType, enabled:true, onlyOnBoot:true})
         assignments=assignments.concat([item]); config.assignments=assignments.slice()
-        formName=""; formCommand=""; formType="app"; formWorkspace=1; formOnlyOnBoot=Model.defaultOnlyOnBootForType("app")
+        formName=""; formCommand=""; formType="app"; formNameEdited=false
         saveConfig(); statusText="Added "+item.name+" → WS"+item.workspace; clearStatusTimer.restart()
         if (root.bar && typeof root.bar.broadcast === "function") root.bar.broadcast("refreshCounts")
         root.countsChanged()
@@ -85,30 +110,161 @@ Panel {
         if(formType==="webapp" && (formCommand.indexOf("http://")===0 || formCommand.indexOf("https://")===0)) formExecPreview="omarchy-launch-webapp '"+formCommand+"'"
         else formExecPreview=formCommand
     }
-    onFormCommandChanged: updateFormPreview()
+    function persistFormWorkspace() {
+        var s=Model.clone(root.config); s.settings.lastFormWorkspace=root.formWorkspace; root.config=s; root.saveConfig()
+    }
+    function removeAssignment(id) {
+        root.assignments=root.assignments.filter(function(a){return a.id!==id})
+        root.config.assignments=root.assignments.slice()
+        root.saveConfig()
+        root.statusText="Removed"; clearStatusTimer.restart()
+    }
+    function isInList(list, exec) {
+        if (!list) return false
+        for (var i=0;i<list.length;i++) if (list[i].exec===exec || list[i].command===exec) return true
+        return false
+    }
+    function toggleInWorkspace(exec, name) {
+        var ws=root.formWorkspace
+        for (var i=0;i<root.assignments.length;i++) {
+            var a=root.assignments[i]
+            if (a.workspace===ws && (a.exec===exec || a.command===exec)) {
+                root.removeAssignment(a.id)
+                root.statusText="Removed "+a.name+" from WS"+ws; clearStatusTimer.restart()
+                return
+            }
+        }
+        var item=Model.normalizeAssignment({workspace:ws, name:name, command:exec, exec:exec, type:"app", enabled:true, onlyOnBoot:true})
+        root.assignments=root.assignments.concat([item]); root.config.assignments=root.assignments.slice()
+        root.saveConfig(); root.statusText="Added "+item.name+" → WS"+item.workspace; clearStatusTimer.restart()
+        if (root.bar && typeof root.bar.broadcast === "function") root.bar.broadcast("refreshCounts")
+        root.countsChanged()
+    }
+    function updateAutofillName() {
+        var cmd=formCommand.trim()
+        if (!cmd.length) { autoName=""; if (!formNameEdited) { fillingName=true; formName=""; fillingName=false } return }
+        var n
+        if (formType==="webapp" && (cmd.indexOf("http://")===0 || cmd.indexOf("https://")===0)) n=Model.displayNameForExec("omarchy-launch-webapp '"+cmd+"'", "Web App")
+        else n=Model.displayNameForExec(cmd, "App")
+        autoName=n
+        if (!formNameEdited) { fillingName=true; formName=n; fillingName=false }
+    }
+    onFormCommandChanged: { updateFormPreview(); updateAutofillName() }
     Timer { id: clearStatusTimer; interval: 3000; onTriggered: root.statusText="" }
+
+    // --- cursor model helpers (plugin-manager pattern) ---
+    function actionCount(app) { return 1 }
+
+    function clampCursor() {
+        var rows = filteredApps
+        if (rows.length === 0) { selectedRow = 0; selectedButton = 0; return }
+        selectedRow = Math.max(0, Math.min(selectedRow, rows.length - 1))
+        selectedButton = Math.max(0, Math.min(selectedButton, actionCount(rows[selectedRow]) - 1))
+    }
+
+    function setCursor(row, button) {
+        cursorActive = true
+        selectedRow = row
+        selectedButton = button
+        clampCursor()
+    }
+
+    function moveCursor(dx, dy) {
+        var rows = filteredApps
+        if (rows.length === 0) return
+        if (!cursorActive) { setCursor(0, 0); return }
+        if (dy !== 0) {
+            if (dy < 0 && selectedRow === 0) {
+                cursorActive = false
+                filterField.forceActiveFocus()
+                return
+            }
+            if (dy > 0 && selectedRow === rows.length - 1) {
+                cursorActive = false
+                filterField.forceActiveFocus()
+                return
+            }
+            selectedRow = Math.max(0, Math.min(rows.length - 1, selectedRow + dy))
+            selectedButton = Math.min(selectedButton, actionCount(rows[selectedRow]) - 1)
+        } else if (dx !== 0) {
+            selectedButton = Math.max(0, Math.min(actionCount(rows[selectedRow]) - 1, selectedButton + dx))
+        }
+        cursorActive = true
+    }
+
+    function moveTabCursor(direction) {
+        var rows = filteredApps
+        if (rows.length === 0) return
+        if (!cursorActive) {
+            if (direction > 0) setCursor(0, 0)
+            else return
+            return
+        }
+        if (direction > 0) {
+            if (selectedRow === rows.length - 1) {
+                cursorActive = false
+                filterField.forceActiveFocus()
+                return
+            }
+            selectedRow++
+            selectedButton = 0
+        } else {
+            if (selectedRow === 0) {
+                cursorActive = false
+                filterField.forceActiveFocus()
+                return
+            }
+            selectedRow--
+            selectedButton = actionCount(rows[selectedRow]) - 1
+        }
+        cursorActive = true
+    }
+
+    function activateCursor() {
+        var app = filteredApps[selectedRow]
+        if (!app) return
+        toggleInWorkspace(app.exec, app.name)
+    }
+
+    function ensureCursorVisible(item) {
+        if (!item || !resultsScroll) return
+        var flick = resultsScroll.contentItem
+        var point = item.mapToItem(flick.contentItem || flick, 0, 0)
+        var top = point.y
+        var bottom = top + item.height
+        if (top < flick.contentY) flick.contentY = Math.max(0, top - Style.space(8))
+        else if (bottom > flick.contentY + flick.height)
+            flick.contentY = bottom - flick.height + Style.space(8)
+    }
 
     Process {
         id: loadProc
-        command: ["bash", "-c", "mkdir -p \"$(dirname \"$1\")\"; [[ -f \"$1\" ]] || echo '{\"version\":1,\"settings\":{\"enabled\":true,\"launchDelayMs\":800,\"staggerMs\":400,\"silent\":true,\"onlyOnBoot\":true},\"assignments\":[]}' > \"$1\"; cat \"$1\"", "_", root.configFile]
+        command: ["bash", "-c", "mkdir -p \"$(dirname \"$1\")\"; [[ -f \"$1\" || ! -f \"$3\" ]] || cp \"$3\" \"$1\"; [[ -f \"$1\" ]] || echo '{\"version\":1,\"settings\":{\"enabled\":true,\"launchDelayMs\":800,\"staggerMs\":400,\"silent\":true,\"onlyOnBoot\":true,\"lastFormWorkspace\":1},\"assignments\":[]}' > \"$1\"; cat \"$1\"", "_", root.configFile, "", root.legacyConfigFile]
         stdout: StdioCollector { id: loadOut; waitForEnd: true }
         stderr: StdioCollector { id: loadErr; waitForEnd: true }
         onExited: function(code){
             root.loading=false; var txt=loadOut.text||""
             if(code!==0){ root.errorText="Failed to load config ("+code+")"; return}
-            try{ var j=JSON.parse(txt); var sane=Model.sanitizeConfig(j); root.config=sane; root.assignments=sane.assignments.slice(); root.countsChanged() }catch(e){ root.errorText="Invalid config JSON: "+e}
+            try{ var j=JSON.parse(txt); var sane=Model.sanitizeConfig(j); root.config=sane; root.assignments=sane.assignments.slice(); root.formWorkspace=sane.settings.lastFormWorkspace; root.countsChanged() }catch(e){ root.errorText="Invalid config JSON: "+e}
         }
     }
     Process {
         id: saveProc
-        property string jsonText: ""
+        property string pendingJson: ""
+        property bool wantsSave: false
         stdout: StdioCollector { id: saveOut; waitForEnd: true }
         stderr: StdioCollector { id: saveErr; waitForEnd: true }
         onExited: function(code){
-            if(code!==0){ root.errorText="Save failed ("+code+"): "+(saveErr.text||""); return}
-            root.errorText=""; root.countsChanged(); refreshServiceProc.running=true
+            if(code!==0){ root.errorText="Save failed ("+code+"): "+(saveErr.text||""); }
+            else root.errorText=""
+            if (saveProc.wantsSave) {
+                saveProc.wantsSave=false
+                saveProc.command=["bash","-c","mkdir -p \"$(dirname \"$1\")\"; printf '%s' \"$2\" > \"$1\"; cat \"$1\" | jq empty && echo OK || echo FAIL", "_", root.configFile, saveProc.pendingJson]
+                saveProc.running=true
+            } else if (code===0) {
+                root.countsChanged(); refreshServiceProc.running=true
+            }
         }
-        onRunningChanged: if(running){ command=["bash","-c","mkdir -p \"$(dirname \"$1\")\"; printf '%s' \"$2\" > \"$1\"; cat \"$1\" | jq empty && echo OK || echo FAIL", "_", root.configFile, jsonText] }
     }
     Process { id: refreshServiceProc; command: ["bash","-c","omarchy-shell -q tenzin.auto-workspace refreshConfig >/dev/null 2>&1 || true"] }
     Process {
@@ -118,19 +274,60 @@ Panel {
         onExited: function(code){
             if(code!==0) return
             var txt=appsOut.text||"", lines=txt.split("\n"), list=[]
-            for(var i=0;i<lines.length;i++){ var l=lines[i].trim(); if(!l) continue; var p=l.split("\t"); if(p.length<2) continue; list.push({name:p[0],exec:p[1],icon:p[2]||""}); if(list.length>600) break}
+            for(var i=0;i<lines.length;i++){ var l=lines[i].trim(); if(!l) continue; var p=l.split("\t"); if(p.length<2) continue; list.push({name:p[0],exec:p[1],icon:p[2]||"",score:Number(p[4])||0}); if(list.length>600) break}
             root.appList=list
         }
     }
+    function alphabeticalCompare(a, b) {
+        var na = a.name.toLowerCase(), nb = b.name.toLowerCase()
+        return na.localeCompare(nb, undefined, { numeric: true })
+    }
+    function isActivated(exec) {
+        for (var i = 0; i < assignments.length; i++)
+            if (assignments[i].exec === exec || assignments[i].command === exec) return true
+        return false
+    }
     property var filteredApps: {
-        var f=appFilter.trim().toLowerCase()
-        if(!f) return appList.slice(0,20)
+        var f = appFilter.trim().toLowerCase()
+        var list = []
+        for (var i=0;i<appList.length;i++){
+            list.push(appList[i])
+        }
+        if (!f) {
+            // No apps assigned yet → show commonly used; once any are
+            // assigned, show only the activated ones
+            var act = list.filter(function(a){ return root.isActivated(a.exec) })
+            var pool = act.length > 0 ? act : list
+            pool.sort(function(a, b){
+                if (b.score !== a.score) return b.score - a.score
+                return root.alphabeticalCompare(a, b)
+            })
+            return pool.slice(0, 8)
+        }
+        var exact = [], prefix = [], sub = []
+        for (var j=0;j<list.length;j++){
+            var b = list[j]
+            var n = b.name.toLowerCase(), e = b.exec.toLowerCase()
+            if (n === f || e === f) exact.push(b)
+            else if (n.indexOf(f) === 0) prefix.push(b)
+            else if (n.indexOf(f) !== -1 || e.indexOf(f) !== -1) sub.push(b)
+        }
+        exact.sort(root.alphabeticalCompare)
+        prefix.sort(root.alphabeticalCompare)
+        sub.sort(root.alphabeticalCompare)
+        return exact.concat(prefix, sub).slice(0, 6)
+    }
+    function getAppsForWs(ws) {
         var out=[]
-        for(var i=0;i<appList.length;i++){ var a=appList[i]; if(a.name.toLowerCase().indexOf(f)!==-1 || a.exec.toLowerCase().indexOf(f)!==-1){ out.push(a); if(out.length>=20) break } }
+        for(var i=0;i<assignments.length;i++) if(assignments[i].workspace===ws) out.push(assignments[i])
+        return out
+    }
+    property var addedApps: {
+        var out=[]
+        for(var i=0;i<assignments.length;i++) if(assignments[i].workspace===formWorkspace) out.push(assignments[i])
         return out
     }
 
-    // ——— centered card: ONLY the add-apps UI ———
     KeyboardPanel {
         id: panel
         anchorItem: root.anchorItem
@@ -139,218 +336,319 @@ Panel {
         open: root.opened
         centerOnBar: true
         focusTarget: keyCatcher
-        contentWidth: panel.fittedContentWidth(Style.space(560))
-        contentHeight: panel.fittedContentHeight(content.implicitHeight, panel.screenH - Style.gapsOut*2 - Style.space(40))
+        padding: Style.space(24)
+        contentWidth: panel.fittedContentWidth(Style.space(900))
+        contentHeight: panel.fittedContentHeight(content.implicitHeight + Style.space(40), panel.screenH - Style.gapsOut*2 - Style.space(16))
 
         PanelKeyCatcher {
             id: keyCatcher
             anchors.fill: parent
+            blocked: filterField.activeFocus
+            onMoveRequested: function(dx, dy) { root.moveCursor(dx, dy) }
+            onActivateRequested: root.activateCursor()
             onCloseRequested: root.close()
-            onTabRequested: function(dir){ root.switchPanel(dir) }
-
-            // scrim
-            Rectangle {
-                anchors.fill: parent
-                color: Qt.rgba(0,0,0,0.35)
-                MouseArea { anchors.fill: parent; onClicked: root.close() }
+            onTabRequested: function(direction) { root.moveTabCursor(direction) }
+            onTextKey: function(t) {
+                if (t === "/") {
+                    cursorActive = false
+                    filterField.forceActiveFocus()
+                    filterField.selectAll()
+                }
             }
 
-            BorderSurface {
-                id: card
-                anchors.centerIn: parent
-                width: Math.min(Style.space(560), panel.screenW - Style.gapsOut*4)
-                implicitHeight: content.implicitHeight + Style.space(32)
-                radius: Style.cornerRadius
-                color: Color.menu.background
-                borderSpec: Border.surfaceSpec("menu", "border", Color.menu.border, Math.max(1, Style.space(2)))
+            ColumnLayout {
+                id: content
+                anchors.fill: parent
+                spacing: Style.space(14)
 
-                ColumnLayout {
-                    id: content
-                    anchors.fill: parent
-                    anchors.margins: Style.space(20)
-                    spacing: Style.space(12)
-
-                    // Title
-                    Text {
-                        text: "Add apps to workspace"
-                        color: root.barForeground
-                        font.family: Style.font.family
-                        font.pixelSize: Style.font.display
-                        font.bold: true
+                // ——— Header ———
+                PanelHero {
+                    Layout.fillWidth: true
+                    title: "Auto Workspace"
+                    meta: root.totalCount + " assignments · " + root.enabledCount + " enabled"
+                    foreground: root.foreground
+                    fontFamily: root.fontFamily
+                    iconComponent: Component {
+                        Text {
+                            text: "󰨧"
+                            color: Color.accent
+                            font.family: Style.font.family
+                            font.pixelSize: Style.font.display
+                        }
                     }
-                    Text {
-                        text: "Pick a workspace, then add an app or web app. Repeat for more."
-                        color: Qt.rgba(root.barForeground.r, root.barForeground.g, root.barForeground.b, 0.6)
-                        font.family: Style.font.family
-                        font.pixelSize: Style.font.caption
-                        wrapMode: Text.WordWrap
-                    }
+                }
 
-                    // Workspace picker 1-10
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: Style.space(8)
-                        Text { text: "Workspace"; color: root.barForeground; font.family: Style.font.family; font.pixelSize: Style.font.caption; Layout.preferredWidth: 90 }
-                        RowLayout {
-                            spacing: 4
+                Text {
+                    text: "↑↓ navigate · Enter toggles · / searches · Esc closes"
+                    color: root.dim
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                    elide: Text.ElideRight
+                    Layout.fillWidth: true
+                }
+
+                // ——— Body: 2 columns — pick+search | preview ———
+                RowLayout {
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: Math.min(Style.space(440), Math.round(panel.screenH * 0.5))
+                    Layout.maximumHeight: Layout.preferredHeight
+                    Layout.minimumHeight: Layout.preferredHeight
+                    spacing: Style.space(14)
+
+                    // ——— Col 1: workspace picker + app search ———
+                    ColumnLayout {
+                        id: leftStack
+                        Layout.fillWidth: false
+                        Layout.preferredWidth: Math.round(content.width * 0.30)
+                        Layout.minimumWidth: Style.space(240)
+                        Layout.alignment: Qt.AlignTop
+                        spacing: Style.space(10)
+
+                        PanelSectionHeader {
+                            text: "PICK A WORKSPACE"
+                            foreground: root.foreground
+                            fontFamily: root.fontFamily
+                        }
+
+                        // Workspace picker 1-10 (5 per row)
+                        GridLayout {
+                            Layout.fillWidth: true
+                            columns: 5
+                            columnSpacing: Style.space(4)
+                            rowSpacing: Style.space(4)
                             Repeater {
                                 model: 10
                                 delegate: Button {
                                     required property int index
                                     text: String(index+1)
-                                    selected: root.formWorkspace===(index+1)
-                                    onClicked: root.formWorkspace=index+1
-                                    horizontalPadding: 10; verticalPadding: 6
+                                    selected: root.workspacePicked && root.formWorkspace===(index+1)
+                                    horizontalPadding: 0
+                                    verticalPadding: 0
+                                    onClicked: { root.workspacePicked = true; root.formWorkspace=index+1; root.persistFormWorkspace() }
+                                    Layout.fillWidth: true
+                                    Layout.preferredHeight: Style.space(38)
                                 }
                             }
                         }
-                    }
 
-                    // Name
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: Style.space(8)
-                        Text { text: "Name"; color: root.barForeground; font.family: Style.font.family; font.pixelSize: Style.font.caption; Layout.preferredWidth: 90 }
-                        TextField {
+                        PanelSeparator {
                             Layout.fillWidth: true
-                            placeholderText: "e.g. YouTube (auto-filled if empty)"
-                            text: root.formName
-                            onTextChanged: root.formName=text
+                            foreground: root.foreground
                         }
-                    }
 
-                    // Type
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: Style.space(8)
-                        Text { text: "Type"; color: root.barForeground; font.family: Style.font.family; font.pixelSize: Style.font.caption; Layout.preferredWidth: 90 }
-                        RowLayout { spacing: Style.space(6)
-                            Button { text: "App"; selected: root.formType==="app"; onClicked: root.formType="app" }
-                            Button { text: "Web App"; selected: root.formType==="webapp"; onClicked: root.formType="webapp" }
-                            Button { text: "Custom"; selected: root.formType==="custom"; onClicked: root.formType="custom" }
+                        PanelSectionHeader {
+                            text: "SEARCH APPS"
+                            foreground: root.foreground
+                            fontFamily: root.fontFamily
                         }
-                    }
 
-                    // Launch timing
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: Style.space(8)
-                        Text { text: "Launch"; color: root.barForeground; font.family: Style.font.family; font.pixelSize: Style.font.caption; Layout.preferredWidth: 90 }
-                        Button {
-                            text: root.formOnlyOnBoot ? "Once per boot" : "Every restart"
-                            selected: root.formOnlyOnBoot
-                            onClicked: root.formOnlyOnBoot=!root.formOnlyOnBoot
-                        }
-                        Text {
-                            text: root.formOnlyOnBoot ? "no duplicate on rescan" : "comes back on shell restart"
-                            color: Qt.rgba(root.barForeground.r, root.barForeground.g, root.barForeground.b, 0.55)
-                            font.family: Style.font.family
-                            font.pixelSize: Style.font.caption-1
-                        }
-                    }
-
-                    // Command / URL
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: Style.space(8)
-                        Text { text: root.formType==="webapp" ? "URL" : "Command"; color: root.barForeground; font.family: Style.font.family; font.pixelSize: Style.font.caption; Layout.preferredWidth: 90 }
-                        TextField {
+                        // App picker
+                        RowLayout {
                             Layout.fillWidth: true
-                            placeholderText: root.formType==="webapp" ? "https://youtube.com" : "e.g. code, foot, spotify"
-                            text: root.formCommand
-                            onTextChanged: root.formCommand=text
-                            onAccepted: root.addAssignment()
-                        }
-                    }
-                    Text {
-                        visible: root.formExecPreview!=="" && root.formExecPreview!==root.formCommand
-                        Layout.fillWidth: true
-                        text: "→ "+root.formExecPreview
-                        color: Qt.rgba(root.barForeground.r, root.barForeground.g, root.barForeground.b, 0.6)
-                        font.family: "monospace"
-                        font.pixelSize: Style.font.caption-1
-                        wrapMode: Text.WrapAnywhere
-                    }
-
-                    // App picker
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: Style.space(8)
-                        TextField {
-                            id: filterField
-                            Layout.fillWidth: true
-                            placeholderText: "Search installed apps..."
-                            text: root.appFilter
-                            onTextChanged: root.appFilter=text
-                            onAccepted: if(root.filteredApps.length>0){ root.formCommand=root.filteredApps[0].exec; root.formName=root.filteredApps[0].name }
-                        }
-                        Button { text: "Refresh"; onClicked: appsProc.running=true }
-                    }
-
-                    ColumnLayout {
-                        visible: root.filteredApps.length>0 && root.formType!=="webapp"
-                        Layout.fillWidth: true
-                        spacing: 2
-                        Repeater {
-                            model: root.filteredApps
-                            delegate: Rectangle {
-                                required property var modelData
+                            spacing: Style.space(8)
+                            TextField {
+                                id: filterField
                                 Layout.fillWidth: true
-                                implicitHeight: 32
-                                radius: Style.cornerRadius
-                                color: Qt.rgba(Color.foreground.r,Color.foreground.g,Color.foreground.b,0.04)
-                                border.width: 1
-                                border.color: Qt.rgba(Color.foreground.r,Color.foreground.g,Color.foreground.b,0.08)
-                                RowLayout {
-                                    anchors.fill: parent
-                                    anchors.leftMargin: 10; anchors.rightMargin: 6
-                                    spacing: 8
-                                    Text { text: modelData.name; color: root.barForeground; font.family: Style.font.family; font.pixelSize: Style.font.caption; Layout.fillWidth: true; elide: Text.ElideRight }
-                                    Text { text: modelData.exec; color: Qt.rgba(root.barForeground.r,root.barForeground.g,root.barForeground.b,0.6); font.family: "monospace"; font.pixelSize: Style.font.caption-2; Layout.maximumWidth: 200; elide: Text.ElideMiddle }
-                                    Button { verticalPadding: 2; horizontalPadding: 8; text: "Use"; onClicked: { root.formCommand=modelData.exec; root.formName=modelData.name; root.formType="app" } }
+                                verticalPadding: Style.space(9)
+                                placeholderText: "Search installed apps..."
+                                foreground: root.foreground
+                                accent: Color.accent
+                                font.family: root.fontFamily
+                                text: root.appFilter
+                                onTextChanged: { root.appFilter = text; root.cursorActive = false }
+                                Keys.onPressed: function(event) {
+                                    if (event.key === Qt.Key_Escape) {
+                                        root.close()
+                                        event.accepted = true
+                                    } else if (event.key === Qt.Key_Tab || event.key === Qt.Key_Backtab) {
+                                        var direction = (event.modifiers & Qt.ShiftModifier) || event.key === Qt.Key_Backtab ? -1 : 1
+                                        if (direction < 0 && !root.cursorActive) {
+                                            var rows = root.filteredApps
+                                            if (rows.length > 0) {
+                                                root.setCursor(rows.length - 1, 0)
+                                                keyCatcher.forceActiveFocus()
+                                            }
+                                        } else {
+                                            root.moveTabCursor(direction)
+                                            if (root.cursorActive) keyCatcher.forceActiveFocus()
+                                        }
+                                        event.accepted = true
+                                    } else if (event.key === Qt.Key_Down) {
+                                        root.setCursor(0, 0)
+                                        keyCatcher.forceActiveFocus()
+                                        event.accepted = true
+                                    } else if (event.key === Qt.Key_Up) {
+                                        var rows = root.filteredApps
+                                        if (rows.length > 0) {
+                                            root.setCursor(rows.length - 1, 0)
+                                            keyCatcher.forceActiveFocus()
+                                            event.accepted = true
+                                        }
+                                    }
                                 }
                             }
+                            Button { text: "⟳"; tooltipText: "Refresh app list"; verticalPadding: Style.space(9); onClicked: appsProc.running=true }
                         }
+
                         Text {
                             visible: root.filteredApps.length===0 && root.appFilter.trim().length>0
+                            Layout.fillWidth: true
                             text: "No matches"
-                            color: Qt.rgba(root.barForeground.r, root.barForeground.g, root.barForeground.b, 0.55)
-                            font.family: Style.font.family
+                            color: root.dim
+                            font.family: root.fontFamily
                             font.pixelSize: Style.font.caption
+                        }
+
+                        Text {
+                            visible: root.filteredApps.length===0 && root.appFilter.trim().length===0
+                            Layout.fillWidth: true
+                            text: "No apps assigned yet — type to search and add"
+                            color: root.dim
+                            font.family: root.fontFamily
+                            font.pixelSize: Style.font.caption
+                        }
+
+                        // Results — scrollable (plugin-manager pattern)
+                        ScrollView {
+                            id: resultsScroll
+                            visible: root.filteredApps.length>0
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            clip: true
+                            ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+                            ScrollBar.vertical.policy: ScrollBar.AsNeeded
+
+                            Column {
+                                width: resultsScroll.width
+                                spacing: Style.space(6)
+
+                                Repeater {
+                                    model: root.filteredApps
+                                    delegate: AppRow {
+                                        app: modelData
+                                        rowIndex: index
+                                        width: parent.width
+                                    }
+                                }
+                            }
                         }
                     }
 
-                    // Status / error
-                    Text {
-                        visible: root.statusText!==""
+                    // ——— Col 2: preview ———
+                    ColumnLayout {
                         Layout.fillWidth: true
-                        text: root.statusText
-                        color: Color.accent
-                        font.family: Style.font.family
-                        font.pixelSize: Style.font.caption
-                        wrapMode: Text.WordWrap
-                    }
-                    Text {
-                        visible: root.errorText!==""
-                        Layout.fillWidth: true
-                        text: root.errorText
-                        color: Color.urgent || "#ff4444"
-                        font.family: Style.font.family
-                        font.pixelSize: Style.font.caption
-                        wrapMode: Text.WordWrap
-                    }
+                        Layout.preferredWidth: Math.round(content.width * 0.70)
+                        Layout.alignment: Qt.AlignTop
+                        spacing: Style.space(10)
 
-                    // Add button
-                    RowLayout {
-                        Layout.fillWidth: true
-                        Item { Layout.fillWidth: true }
-                        Button {
-                            text: "Add to WS " + root.formWorkspace
-                            selected: true
-                            onClicked: root.addAssignment()
+                        PanelSectionHeader {
+                            text: "PREVIEW"
+                            foreground: root.foreground
+                            fontFamily: root.fontFamily
+                        }
+
+                        WorkspacePreview {
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            Layout.minimumHeight: Math.min(Style.space(200), Math.round(panel.screenH * 0.3))
+                            workspace: root.formWorkspace
+                            assignedApps: root.addedApps
+                            screenW: panel.screenW
+                            screenH: panel.screenH
                         }
                     }
                 }
+
+                // ——— Footer: status ———
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: Style.space(12)
+
+                    Text {
+                        visible: root.statusText!==""
+                        text: "✓ " + root.statusText
+                        color: Color.accent
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.caption
+                        wrapMode: Text.WordWrap
+                        Layout.fillWidth: true
+                    }
+                    Text {
+                        visible: root.errorText!==""
+                        text: root.errorText
+                        color: Color.urgent || "#ff4444"
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.caption
+                        wrapMode: Text.WordWrap
+                        Layout.fillWidth: true
+                    }
+                }
+            }
+        }
+    }
+
+    component AppRow: CursorSurface {
+        property var app: null
+        property int rowIndex: 0
+        readonly property bool rowSelected: root.cursorActive && root.selectedRow === rowIndex
+        hasCursor: rowSelected
+        foreground: root.foreground
+        implicitHeight: Style.space(44)
+
+        onRowSelectedChanged: if (rowSelected) root.ensureCursorVisible(this)
+
+        RowLayout {
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+            anchors.leftMargin: Style.space(10)
+            anchors.rightMargin: Style.space(8)
+            spacing: Style.space(8)
+
+            Text {
+                text: "󰐱"
+                color: root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.body
+                Layout.preferredWidth: Style.space(22)
+                horizontalAlignment: Text.AlignHCenter
+                Layout.alignment: Qt.AlignVCenter
+            }
+
+            ColumnLayout {
+                Layout.fillWidth: true
+                spacing: 1
+
+                Text {
+                    text: app ? app.name : ""
+                    color: root.foreground
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.body
+                    elide: Text.ElideRight
+                    Layout.fillWidth: true
+                }
+                Text {
+                    text: app ? (app.exec.indexOf("omarchy-launch-webapp") !== -1 ? "web app" : app.exec.split(" ")[0].split("/").pop()) : ""
+                    color: root.dim
+                    font.family: "monospace"
+                    font.pixelSize: Style.font.caption - 2
+                    elide: Text.ElideRight
+                    Layout.fillWidth: true
+                }
+            }
+
+            ToggleSwitch {
+                Layout.alignment: Qt.AlignVCenter
+                checked: app ? root.isInList(root.addedApps, app.exec) : false
+                cursorRing: true
+                cursorPad: Style.space(3)
+                foreground: root.foreground
+                accent: Color.accent
+                hasCursor: rowSelected && root.selectedButton === 0
+                onHovered: function(on) {
+                    if (on) root.setCursor(rowIndex, 0)
+                }
+                onToggled: if (app) root.toggleInWorkspace(app.exec, app.name)
             }
         }
     }

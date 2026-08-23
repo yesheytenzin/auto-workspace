@@ -19,11 +19,13 @@ Item {
     readonly property string stateHome: Quickshell.env("XDG_STATE_HOME") || home + "/.local/state"
     readonly property string pluginId: "tenzin.auto-workspace"
     readonly property string script: home + "/.config/omarchy/plugins/" + pluginId + "/auto-workspace.sh"
-    readonly property string configFile: configHome + "/omarchy/plugins/" + pluginId + "/config.json"
+    // Outside the plugin dir: the shell reloads the plugin on any file change there
+    readonly property string configFile: stateHome + "/omarchy/auto-workspace/config.json"
 
     property bool autoEnabled: true
     property int launchDelayMs: 800
     property bool launchedThisSession: false
+    property bool launchScheduled: false
     property string lastStatus: ""
 
     function log(msg) {
@@ -48,10 +50,14 @@ Item {
                     root.launchDelayMs = Number(cfg.settings.launchDelayMs || 800)
                 }
             } catch(e) { root.log("parse ensure-config: " + e) }
-            // schedule autostart after delay
-            if (root.autoEnabled && !root.launchedThisSession) {
-                launchTimer.interval = root.launchDelayMs
-                launchTimer.restart()
+            // schedule autostart once per service lifetime — later
+            // refreshConfig calls (panel saves) must never re-launch apps
+            if (!root.launchScheduled) {
+                root.launchScheduled = true
+                if (root.autoEnabled) {
+                    launchTimer.interval = root.launchDelayMs
+                    launchTimer.restart()
+                }
             }
         }
     }

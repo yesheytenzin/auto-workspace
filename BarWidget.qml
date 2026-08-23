@@ -13,8 +13,9 @@ BarWidget {
 
     readonly property string pluginId: "tenzin.auto-workspace"
     readonly property string home: Quickshell.env("HOME")
-    readonly property string configHome: Quickshell.env("XDG_CONFIG_HOME") || home + "/.config"
-    readonly property string configFile: configHome + "/omarchy/plugins/" + pluginId + "/config.json"
+    readonly property string stateHome: Quickshell.env("XDG_STATE_HOME") || home + "/.local/state"
+    // Outside the plugin dir: the shell reloads the plugin on any file change there
+    readonly property string configFile: stateHome + "/omarchy/auto-workspace/config.json"
     readonly property string script: home + "/.config/omarchy/plugins/" + pluginId + "/auto-workspace.sh"
 
     property int totalCount: 0
