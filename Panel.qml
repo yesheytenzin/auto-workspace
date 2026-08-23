@@ -42,7 +42,6 @@ Panel {
     property string formType: "app" // app | webapp | custom
     property string formExecPreview: ""
     property bool formOnlyOnBoot: false // type default: webapp true, app false, custom true (set on show/type change)
-    onFormTypeChanged: if (showAddForm) formOnlyOnBoot = Model.defaultOnlyOnBootForType(formType)
     onShowAddFormChanged: if (showAddForm) formOnlyOnBoot = Model.defaultOnlyOnBootForType(formType)
 
     function open() { root.controller.show(); loadConfig() }
@@ -218,7 +217,7 @@ Panel {
     }
 
     onFormCommandChanged: updateFormPreview()
-    onFormTypeChanged: updateFormPreview()
+    onFormTypeChanged: { if (showAddForm) formOnlyOnBoot = Model.defaultOnlyOnBootForType(formType); updateFormPreview() }
 
     Timer { id: clearStatusTimer; interval: 3000; onTriggered: root.statusText = "" }
 
