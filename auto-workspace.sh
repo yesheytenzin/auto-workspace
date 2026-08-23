@@ -189,21 +189,45 @@ cmd_launch() {
   # Use hyprctl dispatch exec with uwsm-app if needed
   # If exec already contains uwsm-app or omarchy-launch, use as-is
   local final_cmd="$exec_cmd"
-  if [[ "$exec_cmd" != uwsm-app* && "$exec_cmd" != omarchy-launch* && "$exec_cmd" != "chromium"* && "$exec_cmd" != "google-chrome"* && "$exec_cmd" != "firefox"* ]]; then
-    # heuristic: if it's a simple binary without path, wrap with uwsm-app for proper app launching
-    if [[ "$exec_cmd" =~ ^[a-zA-Z0-9._-]+$ || "$exec_cmd" =~ ^[a-zA-Z0-9._-]+[[:space:]] ]]; then
-      final_cmd="uwsm-app -- $exec_cmd"
-    fi
-  fi
+  # TUI editors need a terminal — use omarchy-launch-tui so they get a window
+  local base_for_tui
+  base_for_tui=$(printf '%s' "$exec_cmd" | awk '{print $1}' | xargs basename 2>/dev/null)
+  case "$base_for_tui" in
+    nvim|vim|vi|nano|helix|hx|emacs|micro|btop|htop|yazi|ranger|lf)
+      if [[ "$exec_cmd" != omarchy-launch-tui* ]]; then
+        # preserve args after binary (e.g. "nvim file.txt")
+        local tui_args="${exec_cmd#"$base_for_tui"}"
+        # trim leading space
+        tui_args=$(printf '%s' "$tui_args" | sed 's/^ *//')
+        if [[ -n "$tui_args" ]]; then
+          final_cmd="omarchy-launch-tui --app-id=org.omarchy.$base_for_tui $base_for_tui $tui_args"
+        else
+          final_cmd="omarchy-launch-tui --app-id=org.omarchy.$base_for_tui $base_for_tui"
+        fi
+      fi
+      ;;
+    *)
+      if [[ "$exec_cmd" != uwsm-app* && "$exec_cmd" != omarchy-launch* && "$exec_cmd" != "chromium"* && "$exec_cmd" != "google-chrome"* && "$exec_cmd" != "firefox"* ]]; then
+        # heuristic: if it's a simple binary without path, wrap with uwsm-app for proper app launching
+        if [[ "$exec_cmd" =~ ^[a-zA-Z0-9._-]+$ || "$exec_cmd" =~ ^[a-zA-Z0-9._-]+[[:space:]] ]]; then
+          final_cmd="uwsm-app -- $exec_cmd"
+        fi
+      fi
+      ;;
+  esac
   local dispatch_cmd="$prefix $final_cmd"
   # Hyprland 0.56+ uses hl.exec_cmd via hyprctl eval (dispatch legacy removed)
   # Escape for Lua string: backslash and double quotes
   local lua_escaped
   lua_escaped=$(printf '%s' "$dispatch_cmd" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')
   local is_browser_like="false"
+  local is_tui_like="false"
   if [[ "$final_cmd" == *"chromium"* || "$final_cmd" == *"chrome"* || "$final_cmd" == *"omarchy-launch-webapp"* ]]; then
     is_browser_like="true"
   fi
+  case "$base_for_tui" in
+    nvim|vim|vi|nano|helix|hx|emacs|micro|btop|htop|yazi|ranger|lf) is_tui_like="true" ;;
+  esac
 
   # Snapshot ALL client addresses BEFORE launching — so we can detect windows created by THIS exec
   local before
@@ -231,6 +255,20 @@ cmd_launch() {
     if [[ -n "$new_addrs" ]]; then
       while IFS= read -r addr; do
         [[ -z "$addr" ]] && continue
+        # Filter by expected class — only move windows belonging to this launch
+        local cls
+        cls=$(hyprctl clients -j 2>/dev/null | jq -r --arg a "$addr" '.[] | select(.address==$a) | .class' 2>/dev/null)
+        if [[ "$is_browser_like" == "true" ]]; then
+          # browser launches should only move chromium/chrome app windows
+          if ! [[ "$cls" =~ chrome|chromium ]] && ! [[ "${cls,,}" =~ chrome|chromium ]]; then
+            continue
+          fi
+        elif [[ "$is_tui_like" == "true" ]]; then
+          # tui launches via omarchy-launch-tui create foot/org.omarchy.* windows
+          if ! [[ "$cls" =~ foot|org\.omarchy ]] && ! [[ "${cls,,}" =~ foot|nvim ]]; then
+            continue
+          fi
+        fi
         # Skip if already on the right workspace
         local on_ws
         on_ws=$(hyprctl clients -j 2>/dev/null | jq -r --arg a "$addr" --arg ws "$target_ws" '
@@ -243,8 +281,7 @@ cmd_launch() {
           .[] | select(.address == $a) | ws_ok($ws)
         ' 2>/dev/null)
         if [[ "$on_ws" != "true" ]]; then
-          hyprctl dispatch movetoworkspacesilent "$target_ws,address:$addr" >/dev/null 2>&1 \
-            || hyprctl eval "hl.dsp.window.move({workspace=\"$target_ws\", window=\"address:$addr\", follow=false})" >/dev/null 2>&1 \
+          hyprctl eval "hl.dispatch(hl.dsp.window.move({workspace=\"$target_ws\", window=\"address:$addr\", follow=false}))" >/dev/null 2>&1 \
             || true
         fi
         moved=$((moved+1))
@@ -269,6 +306,17 @@ cmd_launch() {
         if [[ -n "$new2" ]]; then
           while IFS= read -r addr; do
             [[ -z "$addr" ]] && continue
+            local cls2
+            cls2=$(hyprctl clients -j 2>/dev/null | jq -r --arg a "$addr" '.[] | select(.address==$a) | .class' 2>/dev/null)
+            if [[ "$is_browser_like" == "true" ]]; then
+              if ! [[ "$cls2" =~ chrome|chromium ]] && ! [[ "${cls2,,}" =~ chrome|chromium ]]; then
+                continue
+              fi
+            elif [[ "$is_tui_like" == "true" ]]; then
+              if ! [[ "$cls2" =~ foot|org\.omarchy ]] && ! [[ "${cls2,,}" =~ foot|nvim ]]; then
+                continue
+              fi
+            fi
             local on_ws2
             on_ws2=$(hyprctl clients -j 2>/dev/null | jq -r --arg a "$addr" --arg ws "$target_ws" '
               def ws_ok($ws):
@@ -280,8 +328,7 @@ cmd_launch() {
               .[] | select(.address == $a) | ws_ok($ws)
             ' 2>/dev/null)
             if [[ "$on_ws2" != "true" ]]; then
-              hyprctl dispatch movetoworkspacesilent "$target_ws,address:$addr" >/dev/null 2>&1 \
-                || hyprctl eval "hl.dsp.window.move({workspace=\"$target_ws\", window=\"address:$addr\", follow=false})" >/dev/null 2>&1 \
+              hyprctl eval "hl.dispatch(hl.dsp.window.move({workspace=\"$target_ws\", window=\"address:$addr\", follow=false}))" >/dev/null 2>&1 \
                 || true
               m2=$((m2+1))
             fi
