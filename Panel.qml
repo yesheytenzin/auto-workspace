@@ -31,7 +31,6 @@ Panel {
     property string appFilter: ""
     property bool showAddForm: false
     property var expandedWs: ({})
-    property string draggedId: ""
     property var liveByWs: ({})
 
     property int formWorkspace: 1
@@ -99,23 +98,6 @@ Panel {
     function isExpanded(ws) { return expandedWs[ws]===true }
     function toggleExpanded(ws) { var n={}; for(var k in expandedWs) n[k]=expandedWs[k]; n[ws]=!n[ws]; expandedWs=n; if(n[ws]&&appList.length===0) appsProc.running=true }
     function getAppsForWs(ws) { var out=[]; for(var i=0;i<assignments.length;i++) if(assignments[i].workspace===ws) out.push(assignments[i]); return out }
-    function moveAssignment(id,targetWs,targetIndex) {
-        var idx=-1, item=null; for(var i=0;i<assignments.length;i++) if(assignments[i].id===id){idx=i; item=assignments[i]; break}
-        if(idx===-1||!item) return
-        var newList=assignments.slice(); newList.splice(idx,1)
-        var countInTarget=-1, insertAt=newList.length
-        for(var j=0;j<newList.length;j++) if(newList[j].workspace===targetWs){countInTarget++; if(countInTarget===targetIndex){insertAt=j; break}}
-        if(targetIndex!==0 && countInTarget < targetIndex){
-            var last=-1; for(var k=newList.length-1;k>=0;k--) if(newList[k].workspace===targetWs){last=k; break}
-            if(last!==-1) insertAt=last+1; else { insertAt=newList.length; for(var p=0;p<newList.length;p++) if(newList[p].workspace>targetWs){insertAt=p; break} }
-        }
-        var moved=Model.clone(item); moved.workspace=targetWs; newList.splice(insertAt,0,moved)
-        assignments=newList; config.assignments=newList.slice(); saveConfig()
-        statusText="Moved "+moved.name+" → WS"+targetWs; clearStatusTimer.restart()
-        var proc=Qt.createQmlObject('import Quickshell.Io; Process {}', root)
-        proc.command=["bash","-c","addr=$(hyprctl clients -j 2>/dev/null | jq -r --arg name \""+moved.name.replace(/\"/g,'')+"\" '.[] | select(.class|test($name;\"i\") or .title|test($name;\"i\")) | .address' | head -n1); [[ -n \"$addr\" ]] && hyprctl eval \"hl.dsp.window.move({workspace=\\\""+targetWs+"\\\", window=\\\"address:$addr\\\", follow:false})\" >/dev/null 2>&1 || true"]
-        proc.running=true
-    }
     function launchAll(force) { statusText=force?"Force launching...":"Launching..."; launchProc.command=force?["bash",root.script,"--force-launch-all"]:["bash",root.script,"--launch-all"]; launchProc.running=true }
     function updateFormPreview() {
         if(formType==="webapp" && (formCommand.indexOf("http://")===0 || formCommand.indexOf("https://")===0)) formExecPreview="omarchy-launch-webapp '"+formCommand+"'"
@@ -375,10 +357,6 @@ Panel {
                                         workspace: ws
                                         assignedApps: appsForWs
                                         liveClients: liveForWs
-                                        draggedIdGlobal: root.draggedId
-                                        onDropRequest: function(draggedId, targetWs, targetIndex){ root.moveAssignment(draggedId, targetWs, targetIndex) }
-                                        onDragStarted: function(id){ root.draggedId=id }
-                                        onDragEnded: function(){ root.draggedId="" }
                                     }
                                     // expanded list
                                     ColumnLayout {
@@ -395,7 +373,6 @@ Panel {
                                                     Button { text: modelData.enabled?"on":"off"; selected: modelData.enabled; onClicked: root.toggleEnabled(modelData.id) }
                                                     Button { text: "✕"; onClicked: root.removeAssignment(modelData.id) }
                                                 }
-                                                MouseArea { anchors.fill: parent; drag.threshold: 6; onPressed: root.draggedId=modelData.id; onReleased: root.draggedId="" }
                                             }
                                         }
                                         Button { Layout.alignment: Qt.AlignLeft; text: "+ Add app to WS"+ws; onClicked: { root.formWorkspace=ws; root.formOnlyOnBoot=Model.defaultOnlyOnBootForType(root.formType); root.showAddForm=true } }

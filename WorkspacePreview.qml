@@ -3,22 +3,14 @@ import QtQuick.Layouts
 import qs.Commons
 import qs.Ui
 
-// Mock preview of a workspace's tiling. Shows assigned apps as tiles in a dwindle-like split.
-// Supports drag to reorder/move: tiles are draggable, preview is droppable. Emits dropRequest.
+// Mock preview of a workspace's tiling. Shows assigned apps as tiles in a dwindle-like split
+// plus live Hypr windows currently on that workspace.
 Item {
     id: root
     property int workspace: 1
     property var assignedApps: [] // assignments filtered for this WS
     property var liveClients: [] // optional live hyprctl clients for this WS
     property bool isExpanded: false
-    property bool isDropTarget: false
-
-    signal dropRequest(string draggedId, int targetWs, int targetIndex)
-    signal dragStarted(string draggedId)
-    signal dragEnded()
-
-    // expose for Panel's global drag state
-    property string draggedIdGlobal: ""
 
     implicitWidth: 320
     implicitHeight: previewBox.implicitHeight + 28 + (liveClients && liveClients.length>0 ? 22 : 0)
@@ -59,9 +51,9 @@ Item {
             Layout.fillWidth: true
             implicitHeight: 92
             radius: Style.cornerRadius
-            color: root.isDropTarget ? Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.12) : Qt.rgba(Color.foreground.r, Color.foreground.g, Color.foreground.b, 0.04)
+            color: Qt.rgba(Color.foreground.r, Color.foreground.g, Color.foreground.b, 0.04)
             border.width: 1
-            border.color: root.isDropTarget ? Color.accent : Qt.rgba(Color.foreground.r, Color.foreground.g, Color.foreground.b, 0.12)
+            border.color: Qt.rgba(Color.foreground.r, Color.foreground.g, Color.foreground.b, 0.12)
             clip: true
 
             // Live indicator top-right
@@ -89,7 +81,7 @@ Item {
             Text {
                 visible: root.assignedApps.length === 0
                 anchors.centerIn: parent
-                text: "Empty — drag apps here or + Add"
+                text: "Empty — use + Add to assign apps"
                 color: Qt.darker(Color.foreground, 1.4)
                 font.family: Style.font.family
                 font.pixelSize: Style.font.caption - 1
@@ -152,14 +144,6 @@ Item {
                         border.color: modelData.enabled ? Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.45) : Qt.rgba(Color.foreground.r, Color.foreground.g, Color.foreground.b, 0.15)
                         clip: true
 
-                        // Drag handling
-                        property bool isBeingDragged: root.draggedIdGlobal === modelData.id
-
-                        opacity: isBeingDragged ? 0.45 : 1.0
-                        scale: isBeingDragged ? 0.96 : 1.0
-                        Behavior on opacity { NumberAnimation { duration: 120 } }
-                        Behavior on scale { NumberAnimation { duration: 120 } }
-
                         ColumnLayout {
                             anchors.fill: parent
                             anchors.margins: 4
@@ -202,59 +186,7 @@ Item {
                                 font.pixelSize: 7
                             }
                         }
-
-                        MouseArea {
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: Qt.OpenHandCursor
-                            onPressed: function(mouse) {
-                                root.dragStarted(modelData.id)
-                                mouse.accepted = true
-                            }
-                            onReleased: function(mouse) {
-                                root.dragEnded()
-                            }
-                        }
-
-                        // Drop indicator for reordering within same WS
-                        Rectangle {
-                            visible: false // will be used by Panel's global drop handling
-                            anchors.fill: parent
-                            color: "transparent"
-                        }
                     }
-                }
-            }
-
-            // DropArea covering preview
-            DropArea {
-                anchors.fill: parent
-                keys: ["auto-workspace-app"]
-                onEntered: function(drag) {
-                    root.isDropTarget = true
-                    drag.accepted = true
-                }
-                onExited: root.isDropTarget = false
-                onDropped: function(drop) {
-                    root.isDropTarget = false
-                    var draggedId = drop.getDataAsString("auto-workspace-app")
-                    if (!draggedId) draggedId = root.draggedIdGlobal
-                    if (!draggedId) return
-                    // Compute target index based on drop position
-                    var pos = mapToItem(tilesContainer, drop.x, drop.y)
-                    // Simple: if drop on left half and multiple tiles, index 0 else append
-                    // For now append; Panel will handle intelligent insert
-                    var targetIndex = root.assignedApps.length // append
-                    // Try to find nearest tile
-                    var bestIdx = -1
-                    var bestDist = 99999
-                    for (var i = 0; i < tilesContainer.children.length; i++) {
-                        var c = tilesContainer.children[i]
-                        // Repeater delegates are inside tilesContainer via Repeater, actual children are the delegates
-                        // This loop may need to traverse correctly; fallback to append
-                    }
-                    root.dropRequest(draggedId, root.workspace, targetIndex)
-                    drop.accepted = true
                 }
             }
         }
