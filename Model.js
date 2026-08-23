@@ -8,7 +8,7 @@ function defaultConfig() {
         version: 1,
         settings: {
             enabled: true,
-            launchDelayMs: 800,
+            launchDelayMs: 1500,
             staggerMs: 400,
             silent: true,
             onlyOnBoot: true,
@@ -57,7 +57,7 @@ function sanitizeConfig(cfg) {
     var out = clone(defaultConfig())
     if (cfg.settings && typeof cfg.settings === "object") {
         out.settings.enabled = cfg.settings.enabled !== false
-        out.settings.launchDelayMs = Math.max(0, Math.min(10000, parseInt(cfg.settings.launchDelayMs) || 800))
+        out.settings.launchDelayMs = Math.max(0, Math.min(10000, parseInt(cfg.settings.launchDelayMs) || 1500))
         out.settings.staggerMs = Math.max(0, Math.min(2000, parseInt(cfg.settings.staggerMs) || 400))
         out.settings.silent = cfg.settings.silent !== false
         out.settings.onlyOnBoot = cfg.settings.onlyOnBoot !== false

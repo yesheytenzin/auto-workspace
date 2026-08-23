@@ -23,7 +23,7 @@ Item {
     readonly property string configFile: stateHome + "/omarchy/auto-workspace/config.json"
 
     property bool autoEnabled: true
-    property int launchDelayMs: 800
+    property int launchDelayMs: 1500
     property bool launchedThisSession: false
     property bool launchScheduled: false
     property string lastStatus: ""
@@ -47,7 +47,7 @@ Item {
                 var cfg = JSON.parse(txt)
                 if (cfg.settings) {
                     root.autoEnabled = cfg.settings.enabled !== false
-                    root.launchDelayMs = Number(cfg.settings.launchDelayMs || 800)
+                    root.launchDelayMs = Number(cfg.settings.launchDelayMs || 1500)
                 }
             } catch(e) { root.log("parse ensure-config: " + e) }
             // schedule autostart once per service lifetime — later

@@ -25,7 +25,7 @@ default_config() {
   "version": 1,
   "settings": {
     "enabled": true,
-    "launchDelayMs": 800,
+    "launchDelayMs": 1500,
     "staggerMs": 400,
     "silent": true,
     "onlyOnBoot": true,
@@ -154,6 +154,19 @@ cmd_status() {
 EOF
 }
 
+wait_for_hyprland() {
+  local timeout=20 tries=0
+  while ! hyprctl -j version >/dev/null 2>&1; do
+    tries=$((tries+1))
+    if [[ $tries -ge $timeout ]]; then
+      echo "hyprctl not ready after ${timeout}s, aborting launch" >&2
+      return 1
+    fi
+    sleep 1
+  done
+  return 0
+}
+
 cmd_launch() {
   local workspace="$1"
   local exec_cmd="$2"
@@ -191,10 +204,10 @@ cmd_launch() {
   if [[ "$final_cmd" == *"chromium"* || "$final_cmd" == *"chrome"* || "$final_cmd" == *"omarchy-launch-webapp"* ]]; then
     is_browser_like="true"
   fi
-  local browser_before=""
-  if [[ "$is_browser_like" == "true" ]]; then
-    browser_before=$(hyprctl clients -j 2>/dev/null | jq -r '.[] | select(.class|test("chrome|chromium";"i")) | .address' 2>/dev/null || true)
-  fi
+
+  # Snapshot ALL client addresses BEFORE launching — so we can detect windows created by THIS exec
+  local before
+  before=$(hyprctl clients -j 2>/dev/null | jq -r '.[].address' 2>/dev/null | sort -u | tr '\n' ' ')
 
   # Try hl.exec_cmd first (canonical in helpers.lua), then hl.dsp.exec_cmd, then legacy dispatch.
   if ! hyprctl eval "hl.exec_cmd(\"$lua_escaped\")" >/dev/null 2>&1 \
@@ -204,30 +217,87 @@ cmd_launch() {
     return 1
   fi
 
-  # Chromium/webapps can spawn tagged + child windows; move only newly created, mis-placed
-  # browser windows for this launch instead of moving every browser window.
+  # For every launch, verify the new window(s) land on the target workspace.
+  # Chromium shares a profile — new windows often appear on the focused ws (ws1),
+  # so we explicitly move any newly-created window to the assigned workspace.
+  local target_ws="$workspace"
+  local ok=false
+  local tries=40
+  for _try in $(seq 1 $tries); do
+    local now_addrs new_addrs moved=0
+    now_addrs=$(hyprctl clients -j 2>/dev/null | jq -r '.[].address' 2>/dev/null | sort -u)
+    # comm needs sorted inputs: compute new addresses = now - before
+    new_addrs=$(comm -13 <(printf '%s' "$before" | tr ' ' '\n' | sort -u) <(printf '%s' "$now_addrs" | tr ' ' '\n' | sort -u) 2>/dev/null)
+    if [[ -n "$new_addrs" ]]; then
+      while IFS= read -r addr; do
+        [[ -z "$addr" ]] && continue
+        # Skip if already on the right workspace
+        local on_ws
+        on_ws=$(hyprctl clients -j 2>/dev/null | jq -r --arg a "$addr" --arg ws "$target_ws" '
+          def ws_ok($ws):
+            if ($ws|test("^[0-9]+$")) then
+              (.workspace.id == ($ws|tonumber) or .workspace.name == $ws)
+            else
+              .workspace.name == $ws
+            end;
+          .[] | select(.address == $a) | ws_ok($ws)
+        ' 2>/dev/null)
+        if [[ "$on_ws" != "true" ]]; then
+          hyprctl dispatch movetoworkspacesilent "$target_ws,address:$addr" >/dev/null 2>&1 \
+            || hyprctl eval "hl.dsp.window.move({workspace=\"$target_ws\", window=\"address:$addr\", follow=false})" >/dev/null 2>&1 \
+            || true
+        fi
+        moved=$((moved+1))
+      done <<< "$new_addrs"
+      if [[ "$moved" -gt 0 ]]; then
+        ok=true
+        break
+      fi
+    fi
+    sleep 0.3
+  done
+
+  # Browser/webapps can spawn additional child windows shortly after the first;
+  # sweep again in background so every new window from this launch ends up on target.
   if [[ "$is_browser_like" == "true" ]]; then
     (
       sleep 2.5
-      local addrs
-      addrs=$(hyprctl clients -j 2>/dev/null | jq -r --arg ws "$workspace" --arg before "$browser_before" '
-        def ws_ok($ws):
-          if ($ws|test("^[0-9]+$")) then
-            (.workspace.id == ($ws|tonumber) or .workspace.name == $ws)
-          else
-            .workspace.name == $ws
-          end;
-        ($before | split("\n") | map(select(length>0))) as $seen
-        | [.[] | select(.class|test("chrome|chromium";"i"))
-           | select((.address as $a | ($seen | index($a) | not)))
-           | select((ws_ok($ws)) | not)
-           | .address] | .[]' 2>/dev/null)
-      for addr in $addrs; do
-        hyprctl eval "hl.dsp.window.move({workspace=\"$workspace\", window=\"address:$addr\", follow=false})" >/dev/null 2>&1 \
-          || hyprctl dispatch movetoworkspacesilent "$workspace,address:$addr" >/dev/null 2>&1 \
-          || true
+      for _bg in $(seq 1 20); do
+        local now2 new2 m2=0
+        now2=$(hyprctl clients -j 2>/dev/null | jq -r '.[].address' 2>/dev/null | sort -u)
+        new2=$(comm -13 <(printf '%s' "$before" | tr ' ' '\n' | sort -u) <(printf '%s' "$now2" | tr ' ' '\n' | sort -u) 2>/dev/null)
+        if [[ -n "$new2" ]]; then
+          while IFS= read -r addr; do
+            [[ -z "$addr" ]] && continue
+            local on_ws2
+            on_ws2=$(hyprctl clients -j 2>/dev/null | jq -r --arg a "$addr" --arg ws "$target_ws" '
+              def ws_ok($ws):
+                if ($ws|test("^[0-9]+$")) then
+                  (.workspace.id == ($ws|tonumber) or .workspace.name == $ws)
+                else
+                  .workspace.name == $ws
+                end;
+              .[] | select(.address == $a) | ws_ok($ws)
+            ' 2>/dev/null)
+            if [[ "$on_ws2" != "true" ]]; then
+              hyprctl dispatch movetoworkspacesilent "$target_ws,address:$addr" >/dev/null 2>&1 \
+                || hyprctl eval "hl.dsp.window.move({workspace=\"$target_ws\", window=\"address:$addr\", follow=false})" >/dev/null 2>&1 \
+                || true
+              m2=$((m2+1))
+            fi
+          done <<< "$new2"
+        fi
+        # if nothing needed moving, stop early
+        [[ "$m2" -eq 0 ]] && break
+        sleep 0.3
       done
     ) & disown
+  fi
+
+  if [[ "$ok" != "true" ]]; then
+    echo "warn: no new window detected for workspace $workspace: $final_cmd (may have reused existing window)" >&2
+    # not fatal — caller still counts it; don't return error for reused-window case
+    # return 0 so launch_all continues; boot log will show OK with warning
   fi
   return 0
 }
@@ -252,6 +322,9 @@ cmd_launch_all() {
     exit 0
   fi
 
+  # Wait for Hyprland to be ready — boot is the only time this matters
+  wait_for_hyprland || exit 1
+
   # boot_id for per-item once-per-boot gating (type-based defaults handled in Model.js)
   local only_on_boot_global
   only_on_boot_global=$(jq -r '.settings.onlyOnBoot // true' "$CONFIG_FILE")
@@ -271,6 +344,11 @@ cmd_launch_all() {
     echo "no assignments configured"
     exit 0
   fi
+
+  # Boot log for diagnostics
+  local boot_log="$STATE_DIR/launch-$boot_id.log"
+  : > "$boot_log" 2>/dev/null || true
+  echo "$(date -u) boot_id=$boot_id assignments=$count force=$force" >> "$boot_log" 2>/dev/null || true
 
   # Iterate enabled assignments
   local idx=0
@@ -342,11 +420,17 @@ cmd_launch_all() {
     fi
 
     echo "launching [$ws] $name: $exec_cmd (silent=$silent)"
+    echo "$(date -u) START ws=$ws name=$name exec=$exec_cmd" >> "$boot_log" 2>/dev/null || true
     # stagger except first
     if [[ "$idx" -gt 0 && "$stagger" -gt 0 ]]; then
       sleep "$(awk "BEGIN {print $stagger/1000}")"
     fi
-    cmd_launch "$ws" "$exec_cmd" "$silent" || echo "failed to launch $name" >&2
+    if cmd_launch "$ws" "$exec_cmd" "$silent"; then
+      echo "$(date -u) OK ws=$ws name=$name" >> "$boot_log" 2>/dev/null || true
+    else
+      echo "$(date -u) FAIL ws=$ws name=$name" >> "$boot_log" 2>/dev/null || true
+      echo "failed to launch $name" >&2
+    fi
     idx=$((idx+1))
   done
 
