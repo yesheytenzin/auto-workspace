@@ -34,6 +34,7 @@ Panel {
     property var expandedWs: ({}) // ws -> bool
     property string draggedId: ""
     property string draggedSourceWs: ""
+    property var liveByWs: ({}) // hyprland live windows per ws (maybe preview)
 
     // form fields
     property int formWorkspace: 1
@@ -298,6 +299,33 @@ Panel {
         }
     }
 
+    Process {
+        id: liveProc
+        command: ["bash", "-c", "hyprctl clients -j 2>/dev/null | jq -c '[.[] | {ws: .workspace.name, class: .class, title: .title, address: .address}]' 2>/dev/null || echo '[]'"]
+        stdout: StdioCollector { id: liveOut; waitForEnd: true }
+        onExited: function(code){
+            if (code!==0) return
+            try {
+                var arr = JSON.parse(liveOut.text || "[]")
+                var map = {}
+                for (var i=0;i<arr.length;i++) {
+                    var w = String(arr[i].ws)
+                    if (!map[w]) map[w]=[]
+                    map[w].push(arr[i])
+                }
+                root.liveByWs = map
+            } catch(e) {}
+        }
+    }
+    Timer {
+        id: liveTimer
+        interval: 2000
+        repeat: true
+        running: root.opened
+        triggeredOnStart: true
+        onTriggered: if (!liveProc.running) liveProc.running = true
+    }
+
     // filtered apps
     property var filteredApps: {
         var f = appFilter.trim().toLowerCase()
@@ -531,12 +559,13 @@ Panel {
                                     }
                                 }
 
-                                // Preview — mock dwindle, supports drag to move
+                                // Preview — mock dwindle + hypr live, supports drag to move
                                 WorkspacePreview {
                                     Layout.fillWidth: true
                                     visible: expanded || appsForWs.length>0
                                     workspace: ws
                                     assignedApps: appsForWs
+                                    liveClients: root.liveByWs[String(ws)] || []
                                     draggedIdGlobal: root.draggedId
                                     onDropRequest: function(draggedId, targetWs, targetIndex) {
                                         root.moveAssignment(draggedId, targetWs, targetIndex)

@@ -21,7 +21,7 @@ Item {
     property string draggedIdGlobal: ""
 
     implicitWidth: 320
-    implicitHeight: previewBox.implicitHeight + 28
+    implicitHeight: previewBox.implicitHeight + 28 + (liveClients && liveClients.length>0 ? 22 : 0)
 
     ColumnLayout {
         anchors.fill: parent
@@ -53,7 +53,7 @@ Item {
             }
         }
 
-        // Preview box - dwindle mock
+        // Preview box - dwindle mock (assigned) + hypr live overlay maybe
         Rectangle {
             id: previewBox
             Layout.fillWidth: true
@@ -63,6 +63,27 @@ Item {
             border.width: 1
             border.color: root.isDropTarget ? Color.accent : Qt.rgba(Color.foreground.r, Color.foreground.g, Color.foreground.b, 0.12)
             clip: true
+
+            // Live indicator top-right
+            Rectangle {
+                visible: root.liveClients && root.liveClients.length > 0
+                anchors.top: parent.top
+                anchors.right: parent.right
+                anchors.margins: 4
+                implicitHeight: 14
+                implicitWidth: liveCountText.implicitWidth + 8
+                radius: 7
+                color: Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.9)
+                Text {
+                    id: liveCountText
+                    anchors.centerIn: parent
+                    text: "● " + (root.liveClients ? root.liveClients.length : 0) + " live"
+                    color: "white"
+                    font.family: Style.font.family
+                    font.pixelSize: 7
+                    font.bold: true
+                }
+            }
 
             // Empty state
             Text {
@@ -184,8 +205,6 @@ Item {
 
                         MouseArea {
                             anchors.fill: parent
-                            drag.target: parent
-                            drag.threshold: 6
                             hoverEnabled: true
                             cursorShape: Qt.OpenHandCursor
                             onPressed: function(mouse) {
@@ -194,9 +213,6 @@ Item {
                             }
                             onReleased: function(mouse) {
                                 root.dragEnded()
-                            }
-                            onPositionChanged: function(mouse) {
-                                // handled via DropArea in parent
                             }
                         }
 
@@ -239,6 +255,44 @@ Item {
                     }
                     root.dropRequest(draggedId, root.workspace, targetIndex)
                     drop.accepted = true
+                }
+            }
+        }
+
+        // Live Hypr windows (maybe) — chips below preview
+        RowLayout {
+            visible: root.liveClients && root.liveClients.length > 0
+            Layout.fillWidth: true
+            spacing: 4
+            Text {
+                text: "Live:"
+                color: Color.accent
+                font.family: Style.font.family
+                font.pixelSize: 7
+                font.bold: true
+            }
+            Flow {
+                Layout.fillWidth: true
+                spacing: 4
+                Repeater {
+                    model: root.liveClients
+                    delegate: Rectangle {
+                        implicitHeight: 16
+                        implicitWidth: liveChipText.implicitWidth + 10
+                        radius: 8
+                        color: Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.14)
+                        border.width: 1
+                        border.color: Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.28)
+                        Text {
+                            id: liveChipText
+                            anchors.centerIn: parent
+                            text: (modelData.class || modelData.title || "win").toString().slice(0,14)
+                            color: Color.accent
+                            font.family: Style.font.family
+                            font.pixelSize: 7
+                            elide: Text.ElideRight
+                        }
+                    }
                 }
             }
         }
