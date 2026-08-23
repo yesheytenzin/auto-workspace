@@ -274,7 +274,7 @@ Panel {
         onExited: function(code){
             if(code!==0) return
             var txt=appsOut.text||"", lines=txt.split("\n"), list=[]
-            for(var i=0;i<lines.length;i++){ var l=lines[i].trim(); if(!l) continue; var p=l.split("\t"); if(p.length<2) continue; list.push({name:p[0],exec:p[1],icon:p[2]||"",score:Number(p[4])||0}); if(list.length>600) break}
+            for(var i=0;i<lines.length;i++){ var l=lines[i].trim(); if(!l) continue; var p=l.split("\t"); if(p.length<2) continue; list.push({name:p[0],exec:p[1],icon:p[2]||"",iconPath:p[3]||"",score:Number(p[5])||0}); if(list.length>600) break}
             root.appList=list
         }
     }
@@ -286,6 +286,9 @@ Panel {
         for (var i = 0; i < assignments.length; i++)
             if (assignments[i].exec === exec || assignments[i].command === exec) return true
         return false
+    }
+    function iconSourceFor(app) {
+        return app && app.iconPath && app.iconPath !== "" ? "file://" + app.iconPath : ""
     }
     property var filteredApps: {
         var f = appFilter.trim().toLowerCase()
@@ -605,14 +608,27 @@ Panel {
             anchors.rightMargin: Style.space(8)
             spacing: Style.space(8)
 
-            Text {
-                text: "󰐱"
-                color: root.foreground
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.body
+            Item {
                 Layout.preferredWidth: Style.space(22)
-                horizontalAlignment: Text.AlignHCenter
                 Layout.alignment: Qt.AlignVCenter
+                Image {
+                    id: rowIcon
+                    anchors.centerIn: parent
+                    visible: source !== ""
+                    width: 16
+                    height: 16
+                    source: app ? root.iconSourceFor(app) : ""
+                    fillMode: Image.PreserveAspectFit
+                    onStatusChanged: if (status === Image.Error) source = ""
+                }
+                Text {
+                    anchors.centerIn: parent
+                    visible: rowIcon.source === ""
+                    text: "󰐱"
+                    color: root.foreground
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.body
+                }
             }
 
             ColumnLayout {
