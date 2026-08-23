@@ -1,22 +1,55 @@
 import QtQuick
 import QtQuick.Layouts
+import Quickshell
 import qs.Commons
 import qs.Ui
 
-// Mock preview of a workspace's tiling. Shows assigned apps as tiles in a dwindle-like split
-// plus live Hypr windows currently on that workspace.
+// Mock preview of a workspace's tiling. Shows assigned apps as tiles in a
+// dwindle-like split, miniaturized to the user's screen aspect.
 Item {
     id: root
     property int workspace: 1
     property var assignedApps: [] // assignments filtered for this WS
-    property var liveClients: [] // optional live hyprctl clients for this WS
+    property var appList: [] // installed apps with iconPath, for icon lookup
     property bool isExpanded: false
     property int screenW: 0
     property int screenH: 0
+    property var bar: null
     readonly property real screenAspect: screenW > 0 && screenH > 0 ? screenH / screenW : 0.5625
+    readonly property var appLibrary: root.bar && root.bar.shell ? root.bar.shell.appLibrary : null
+
+    function iconPathFor(exec) {
+        for (var i = 0; i < appList.length; i++)
+            if (appList[i].exec === exec || appList[i].command === exec) return appList[i].iconPath || ""
+        return ""
+    }
+    function iconSourceFor(exec) {
+        // Local iconPath from list-apps, otherwise reuse the shell's AppLibrary
+        // (same lookup the Omarchy menu uses: themed plus fallback icon).
+        for (var i = 0; i < appList.length; i++) {
+            if (appList[i].exec === exec || appList[i].command === exec) {
+                var a = appList[i]
+                if (a.iconPath && a.iconPath !== "") return "file://" + a.iconPath
+                var icon = String(a.icon || "")
+                if (root.appLibrary && typeof root.appLibrary.iconSource === "function") return root.appLibrary.iconSource(icon)
+                if (icon !== "" && icon.charAt(0) === "/") return "file://" + icon
+                var themed = ""
+                try { themed = Quickshell.iconPath(icon, true) } catch(e) { themed = "" }
+                if (themed && themed.length > 0) return themed
+                try { return Quickshell.iconPath("application-x-executable", true) } catch(e) { return "" }
+            }
+        }
+        // Exec not in appList (e.g. custom command): try icon by basename, else generic
+        var base = String(exec || "").split(" ")[0].split("/").pop()
+        if (root.appLibrary && typeof root.appLibrary.iconSource === "function") return root.appLibrary.iconSource(base)
+        var fb = ""
+        try { fb = Quickshell.iconPath(base, true) } catch(e) { fb = "" }
+        if (fb && fb.length > 0 && fb.indexOf("image://icon/application-x-executable") === -1) return fb
+        try { return Quickshell.iconPath("application-x-executable", true) } catch(e) { return "" }
+    }
 
     implicitWidth: 320
-    implicitHeight: previewBox.implicitHeight + 28 + (liveClients && liveClients.length>0 ? 22 : 0)
+    implicitHeight: previewBox.implicitHeight + 28
 
     ColumnLayout {
         anchors.fill: parent
@@ -39,13 +72,6 @@ Item {
                 font.pixelSize: Style.font.caption - 1
             }
             Item { Layout.fillWidth: true }
-            Text {
-                visible: root.liveClients && root.liveClients.length > 0
-                text: "● live " + (root.liveClients ? root.liveClients.length : 0)
-                color: Color.accent
-                font.family: Style.font.family
-                font.pixelSize: Style.font.caption - 2
-            }
         }
 
         // Spacers center the mini screen vertically in whatever room the
@@ -66,27 +92,6 @@ Item {
             border.color: Qt.rgba(Color.foreground.r, Color.foreground.g, Color.foreground.b, 0.12)
             clip: true
 
-            // Live indicator top-right
-            Rectangle {
-                visible: root.liveClients && root.liveClients.length > 0
-                anchors.top: parent.top
-                anchors.right: parent.right
-                anchors.margins: 4
-                implicitHeight: 14
-                implicitWidth: liveCountText.implicitWidth + 8
-                radius: 7
-                color: Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.9)
-                Text {
-                    id: liveCountText
-                    anchors.centerIn: parent
-                    text: "● " + (root.liveClients ? root.liveClients.length : 0) + " live"
-                    color: "white"
-                    font.family: Style.font.family
-                    font.pixelSize: 7
-                    font.bold: true
-                }
-            }
-
             // Empty state
             Text {
                 visible: root.assignedApps.length === 0
@@ -98,7 +103,7 @@ Item {
                 horizontalAlignment: Text.AlignHCenter
             }
 
-            // Tiles - manual position for dwindle mock, fallback to Flow for >4
+            // Tiles - manual position for dwindle mock, fallback to grid for >4
             Item {
                 id: tilesContainer
                 anchors.fill: parent
@@ -158,81 +163,36 @@ Item {
                             anchors.fill: parent
                             anchors.margins: 4
                             spacing: 1
-                            Text {
+                            Item {
                                 Layout.fillWidth: true
-                                text: modelData.name || "App"
-                                color: modelData.enabled ? Color.foreground : Qt.darker(Color.foreground, 1.3)
-                                font.family: Style.font.family
-                                font.pixelSize: Style.font.caption - 1
-                                font.bold: true
-                                elide: Text.ElideRight
-                                maximumLineCount: 1
-                                horizontalAlignment: Text.AlignHCenter
-                            }
-                            Text {
-                                Layout.fillWidth: true
-                                text: {
-                                    var e = modelData.exec || modelData.command || ""
-                                    // shorten: show basename or host
-                                    var m = e.match(/omarchy-launch-webapp\s+'([^']+)'/)
-                                    if (m) {
-                                        try { var u = new URL(m[1]); return u.hostname.replace(/^www\./,"") } catch(e){ return m[1].slice(0,16) }
+                                Layout.fillHeight: true
+                                ColumnLayout {
+                                    anchors.centerIn: parent
+                                    spacing: 2
+                                    Image {
+                                        Layout.alignment: Qt.AlignHCenter
+                                        Layout.preferredWidth: 16
+                                        Layout.preferredHeight: 16
+                                        visible: source !== ""
+                                        source: root.iconSourceFor(modelData.exec || modelData.command)
+                                        fillMode: Image.PreserveAspectFit
+                                        asynchronous: true
+                                        cache: true
+                                        onStatusChanged: if (status === Image.Error) source = ""
                                     }
-                                    var base = e.split(" ")[0].split("/").pop()
-                                    return base.slice(0, 14)
+                                    Text {
+                                        Layout.fillWidth: true
+                                        text: modelData.name || "App"
+                                        color: modelData.enabled ? Color.foreground : Qt.darker(Color.foreground, 1.3)
+                                        font.family: Style.font.family
+                                        font.pixelSize: Style.font.caption - 1
+                                        font.bold: true
+                                        elide: Text.ElideRight
+                                        maximumLineCount: 1
+                                        horizontalAlignment: Text.AlignHCenter
+                                    }
                                 }
-                                color: Qt.darker(Color.foreground, 1.35)
-                                font.family: "monospace"
-                                font.pixelSize: 7
-                                elide: Text.ElideMiddle
-                                horizontalAlignment: Text.AlignHCenter
                             }
-                            Item { Layout.fillHeight: true }
-                            Text {
-                                Layout.alignment: Qt.AlignHCenter
-                                text: modelData.onlyOnBoot ? "once" : "every"
-                                color: modelData.onlyOnBoot ? Color.accent : Qt.darker(Color.foreground, 1.2)
-                                font.family: Style.font.family
-                                font.pixelSize: 7
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Live Hypr windows (maybe) — chips below preview
-        RowLayout {
-            visible: root.liveClients && root.liveClients.length > 0
-            Layout.fillWidth: true
-            spacing: 4
-            Text {
-                text: "Live:"
-                color: Color.accent
-                font.family: Style.font.family
-                font.pixelSize: 7
-                font.bold: true
-            }
-            Flow {
-                Layout.fillWidth: true
-                spacing: 4
-                Repeater {
-                    model: root.liveClients
-                    delegate: Rectangle {
-                        implicitHeight: 16
-                        implicitWidth: liveChipText.implicitWidth + 10
-                        radius: 8
-                        color: Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.14)
-                        border.width: 1
-                        border.color: Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.28)
-                        Text {
-                            id: liveChipText
-                            anchors.centerIn: parent
-                            text: (modelData.class || modelData.title || "win").toString().slice(0,14)
-                            color: Color.accent
-                            font.family: Style.font.family
-                            font.pixelSize: 7
-                            elide: Text.ElideRight
                         }
                     }
                 }

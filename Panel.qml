@@ -282,13 +282,17 @@ Panel {
         var na = a.name.toLowerCase(), nb = b.name.toLowerCase()
         return na.localeCompare(nb, undefined, { numeric: true })
     }
-    function isActivated(exec) {
-        for (var i = 0; i < assignments.length; i++)
-            if (assignments[i].exec === exec || assignments[i].command === exec) return true
-        return false
-    }
+    readonly property var appLibrary: root.bar && root.bar.shell ? root.bar.shell.appLibrary : null
     function iconSourceFor(app) {
-        return app && app.iconPath && app.iconPath !== "" ? "file://" + app.iconPath : ""
+        if (!app) return ""
+        if (app.iconPath && app.iconPath !== "") return "file://" + app.iconPath
+        var icon = String(app.icon || "")
+        if (root.appLibrary && typeof root.appLibrary.iconSource === "function") return root.appLibrary.iconSource(icon)
+        if (icon !== "" && icon.charAt(0) === "/") return "file://" + icon
+        var themed = ""
+        try { themed = Quickshell.iconPath(icon, true) } catch(e) { themed = "" }
+        if (themed && themed.length > 0) return themed
+        try { return Quickshell.iconPath("application-x-executable", true) } catch(e) { return "" }
     }
     property var filteredApps: {
         var f = appFilter.trim().toLowerCase()
@@ -297,9 +301,9 @@ Panel {
             list.push(appList[i])
         }
         if (!f) {
-            // No apps assigned yet → show commonly used; once any are
-            // assigned, show only the activated ones
-            var act = list.filter(function(a){ return root.isActivated(a.exec) })
+            // Apps assigned to THIS workspace → show them; otherwise show
+            // the commonly used list
+            var act = list.filter(function(a){ return root.isInList(root.addedApps, a.exec) })
             var pool = act.length > 0 ? act : list
             pool.sort(function(a, b){
                 if (b.score !== a.score) return b.score - a.score
@@ -373,7 +377,7 @@ Panel {
                     fontFamily: root.fontFamily
                     iconComponent: Component {
                         Text {
-                            text: "󰨧"
+                            text: "󱂬"
                             color: Color.accent
                             font.family: Style.font.family
                             font.pixelSize: Style.font.display
@@ -554,8 +558,10 @@ Panel {
                             Layout.fillWidth: true
                             Layout.fillHeight: true
                             Layout.minimumHeight: Math.min(Style.space(200), Math.round(panel.screenH * 0.3))
+                            bar: root.bar
                             workspace: root.formWorkspace
                             assignedApps: root.addedApps
+                            appList: root.appList
                             screenW: panel.screenW
                             screenH: panel.screenH
                         }
@@ -619,6 +625,8 @@ Panel {
                     height: 16
                     source: app ? root.iconSourceFor(app) : ""
                     fillMode: Image.PreserveAspectFit
+                    asynchronous: true
+                    cache: true
                     onStatusChanged: if (status === Image.Error) source = ""
                 }
                 Text {

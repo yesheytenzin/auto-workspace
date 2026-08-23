@@ -54,10 +54,20 @@ cmd_ensure_config() {
 }
 
 cmd_list_apps() {
-  # List .desktop apps: Name | Exec | Icon | File | Score
+  # List .desktop apps: Name | Exec | Icon | IconPath | File | Score
   # Score = rough frecency from shell histories + recently-used.xbel, so the
-  # panel can show commonly used apps first.
+  # panel can show commonly used apps first. IconPath lets the UI render
+  # real icons instead of glyphs.
   local seen=""
+  # Icon index: basename (sans extension) -> first path found, pruned to the
+  # common theme sizes so the find stays cheap.
+  local -A icon_idx
+  local ipath
+  while IFS= read -r -d '' ipath; do
+    local ibase="${ipath##*/}"
+    ibase="${ibase%.*}"
+    [[ -n "${icon_idx[$ibase]:-}" ]] || icon_idx["$ibase"]="$ipath"
+  done < <(find "$HOME/.local/share/icons" "$HOME/.icons" "/usr/share/icons" "/var/lib/flatpak/exports/share/icons" "$HOME/.local/share/flatpak/exports/share/icons" -type f \( -name "*.png" -o -name "*.svg" \) \( -path "*/16x16/*" -o -path "*/22x22/*" -o -path "*/24x24/*" -o -path "*/32x32/*" -o -path "*/48x48/*" -o -path "*/64x64/*" -o -path "*/128x128/*" -o -path "*/256x256/*" -o -path "*/512x512/*" -o -path "*/scalable/*" -o -path "*/flatpak/*" \) -print0 2>/dev/null)
   # Collect shell history once, then count the leading command words.
   local hist_txt="" h
   for h in "$HOME/.bash_history" "$HOME/.zsh_history" "$HOME/.local/share/fish/fish_history"; do
@@ -86,6 +96,15 @@ cmd_list_apps() {
       nodisplay=$(grep -m1 "^NoDisplay=" "$file" 2>/dev/null | cut -d= -f2- | head -n1)
       [[ "$hidden" == "true" || "$nodisplay" == "true" ]] && continue
       [[ -z "$name" || -z "$exec_line" ]] && continue
+      # resolve the icon to a real file path when possible
+      local icon_path=""
+      if [[ -n "$icon" ]]; then
+        if [[ "$icon" == /* ]]; then
+          [[ -f "$icon" ]] && icon_path="$icon"
+        else
+          icon_path="${icon_idx[$icon]:-}"
+        fi
+      fi
       # strip field codes %U %F etc
       exec_line=$(echo "$exec_line" | sed -E 's/ \%[UuFfDdNnickvm]//g' | xargs)
       [[ -z "$exec_line" ]] && continue
@@ -112,7 +131,7 @@ cmd_list_apps() {
         fi
       fi
       [[ -n "${xbel_count[$file]:-}" ]] && score=$(( score + xbel_count["$file"] ))
-      printf "%s\t%s\t%s\t%s\t%s\n" "$name" "$exec_line" "$icon" "$file" "$score"
+      printf "%s\t%s\t%s\t%s\t%s\t%s\n" "$name" "$exec_line" "$icon" "$icon_path" "$file" "$score"
     done < <(find "$dir" -maxdepth 1 -name "*.desktop" -print0 2>/dev/null)
   done | sort -u -t $'\t' -k1,1
 }

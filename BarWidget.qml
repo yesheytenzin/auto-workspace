@@ -98,8 +98,8 @@ BarWidget {
         id: button
         anchors.fill: parent
         bar: root.bar
-        // distinctive workspace icon; use 4 squares
-        text: "󰨧"
+        // workspace dashboard — clearer at small bar size than 4-squares-plus
+        text: "󱂬"
         // fall back if font missing: ◧
         slotSize: Style.bar.statusSlot
         tooltipText: root.pluginEnabled
