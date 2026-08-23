@@ -24,7 +24,7 @@ omarchy bar move tenzin.auto-workspace --section left
    - **App** — `.desktop` Exec like `code`, `spotify`, `foot`, `chromium`
    - **Web App** — URL like `https://youtube.com` (uses `omarchy-launch-webapp`)
    - **Custom** — raw command as-is
-3. **Add to WS** — saved to `~/.config/omarchy/plugins/tenzin.auto-workspace/config.json`.
+3. **Add to WS** — saved to `~/.local/state/omarchy/auto-workspace/config.json` (legacy plugin-folder config is auto-migrated).
 4. Click **Launch all** to test now, or `↗` on a single rule. On next boot/login it launches automatically.
 
 Tips:
@@ -37,7 +37,7 @@ Tips:
 
 ## Config
 
-`~/.config/omarchy/plugins/tenzin.auto-workspace/config.json`:
+`~/.local/state/omarchy/auto-workspace/config.json`:
 ```json
 {
   "version": 1,

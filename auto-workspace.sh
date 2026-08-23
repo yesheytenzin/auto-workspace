@@ -187,31 +187,57 @@ cmd_launch() {
   # Escape for Lua string: backslash and double quotes
   local lua_escaped
   lua_escaped=$(printf '%s' "$dispatch_cmd" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')
-  # Try hl.exec_cmd first (canonical in helpers.lua), then hl.dsp.exec_cmd
-  if hyprctl eval "hl.exec_cmd(\"$lua_escaped\")" 2>&1; then
-    # Chromium --app windows lose the workspace tag due to zygote fork; fix with delayed move
-    if [[ "$final_cmd" == *"chromium"* || "$final_cmd" == *"chrome"* || "$final_cmd" == *"omarchy-launch-webapp"* ]]; then
-      # async move checker: after Chrome spawns, move mis-placed window to target ws
-      (
-        sleep 2.5
-        # find most recent chrome window not on target ws and move it
-        local addrs
-        addrs=$(hyprctl clients -j 2>/dev/null | jq -r --arg ws "$workspace" '
-          [.[] | select(.class|test("chrome|chromium";"i")) | select(.workspace.name != $ws and .workspace.id != ($ws|tonumber)) | .address] | .[]' 2>/dev/null | tail -n 5)
-        for addr in $addrs; do
-          # only move the newest if multiple; check if title hints at our exec host
-          hyprctl eval "hl.dsp.window.move({workspace=\"$workspace\", window=\"address:$addr\", follow=false})" >/dev/null 2>&1 || \
-          hyprctl eval "hl.dsp.window.move({workspace=\"$workspace\", follow=false})" >/dev/null 2>&1 || true
-        done
-      ) & disown
-    fi
-    return 0
-  elif hyprctl eval "hl.dsp.exec_cmd(\"$lua_escaped\")" 2>&1; then
-    return 0
+  local is_browser_like="false"
+  if [[ "$final_cmd" == *"chromium"* || "$final_cmd" == *"chrome"* || "$final_cmd" == *"omarchy-launch-webapp"* ]]; then
+    is_browser_like="true"
+  fi
+  local browser_before=""
+  if [[ "$is_browser_like" == "true" ]]; then
+    browser_before=$(hyprctl clients -j 2>/dev/null | jq -r '.[] | select(.class|test("chrome|chromium";"i")) | .address' 2>/dev/null || true)
+  fi
+
+  # Try hl.exec_cmd first (canonical in helpers.lua), then hl.dsp.exec_cmd, then legacy dispatch.
+  if ! hyprctl eval "hl.exec_cmd(\"$lua_escaped\")" >/dev/null 2>&1 \
+    && ! hyprctl eval "hl.dsp.exec_cmd(\"$lua_escaped\")" >/dev/null 2>&1 \
+    && ! hyprctl dispatch exec "$dispatch_cmd" >/dev/null 2>&1; then
+    echo "failed to execute launch command on workspace $workspace: $final_cmd" >&2
+    return 1
+  fi
+
+  # Chromium/webapps can spawn tagged + child windows; move only newly created, mis-placed
+  # browser windows for this launch instead of moving every browser window.
+  if [[ "$is_browser_like" == "true" ]]; then
+    (
+      sleep 2.5
+      local addrs
+      addrs=$(hyprctl clients -j 2>/dev/null | jq -r --arg ws "$workspace" --arg before "$browser_before" '
+        def ws_ok($ws):
+          if ($ws|test("^[0-9]+$")) then
+            (.workspace.id == ($ws|tonumber) or .workspace.name == $ws)
+          else
+            .workspace.name == $ws
+          end;
+        ($before | split("\n") | map(select(length>0))) as $seen
+        | [.[] | select(.class|test("chrome|chromium";"i"))
+           | select((.address as $a | ($seen | index($a) | not)))
+           | select((ws_ok($ws)) | not)
+           | .address] | .[]' 2>/dev/null)
+      for addr in $addrs; do
+        hyprctl eval "hl.dsp.window.move({workspace=\"$workspace\", window=\"address:$addr\", follow=false})" >/dev/null 2>&1 \
+          || hyprctl dispatch movetoworkspacesilent "$workspace,address:$addr" >/dev/null 2>&1 \
+          || true
+      done
+    ) & disown
+  fi
+  return 0
+}
+
+default_only_on_boot_for_type() {
+  local type="${1:-app}"
+  if [[ "$type" == "app" ]]; then
+    echo "false"
   else
-    hyprctl dispatch exec "$dispatch_cmd" 2>&1 || hyprctl dispatch exec "[workspace $workspace] $final_cmd" 2>&1 || {
-      hyprctl eval "hl.exec_cmd(\"[workspace $workspace] $final_cmd\")" 2>&1
-    }
+    echo "true"
   fi
 }
 
@@ -249,10 +275,11 @@ cmd_launch_all() {
   # Iterate enabled assignments
   local idx=0
   jq -c '.assignments[] | select(.enabled==true)' "$CONFIG_FILE" 2>/dev/null | while read -r item; do
-    local ws exec_cmd name
+    local ws exec_cmd name type
     ws=$(echo "$item" | jq -r '.workspace')
     exec_cmd=$(echo "$item" | jq -r '.exec // .command // empty')
     name=$(echo "$item" | jq -r '.name // empty')
+    type=$(echo "$item" | jq -r '.type // "app"')
     if [[ -z "$ws" || -z "$exec_cmd" ]]; then
       echo "skip invalid item: $item" >&2
       continue
@@ -262,7 +289,8 @@ cmd_launch_all() {
     local item_only
     item_only=$(echo "$item" | jq -r 'if has("onlyOnBoot") then .onlyOnBoot else empty end')
     if [[ -z "$item_only" || "$item_only" == "null" ]]; then
-      item_only="$only_on_boot_global"
+      item_only=$(default_only_on_boot_for_type "$type")
+      [[ -z "$item_only" ]] && item_only="$only_on_boot_global"
     fi
     # Normalize to string "true"/"false"
     if [[ "$item_only" == "1" ]]; then item_only="true"; fi
@@ -272,18 +300,44 @@ cmd_launch_all() {
       continue
     fi
 
-    # Dedup: check if window already exists matching class/title roughly
-    # Use hyprctl clients -j and search for class/title containing name or exec basename
+    # Dedup: only skip when we can match confidently. Broad title/class regex creates
+    # false positives and causes valid assignments to be skipped.
     local basename
     basename=$(echo "$exec_cmd" | awk '{print $1}' | xargs basename 2>/dev/null | cut -d' ' -f1)
     basename=$(basename "$basename" 2>/dev/null || echo "$basename")
-    # simple check: if any client has workspace == ws and class/title contains basename/name, skip unless force
+    local app_id=""
+    if [[ "$exec_cmd" =~ --app-id=([^[:space:]]+) ]]; then
+      app_id="${BASH_REMATCH[1]}"
+    fi
     if [[ "$force" != "true" ]]; then
-      if hyprctl clients -j 2>/dev/null | jq -e --arg ws "$ws" --arg bn "$basename" --arg nm "$name" '
-        any(.[]; (.workspace.id == ($ws|tonumber) or .workspace.name == $ws) and ((.class|test($bn;"i")) or (.title|test($nm;"i")) or (.initialClass|test($bn;"i"))))
-      ' >/dev/null 2>&1; then
-        echo "skip $name on ws $ws — already running"
-        continue
+      if [[ "$exec_cmd" == omarchy-launch-webapp* || "$exec_cmd" == chromium* || "$exec_cmd" == google-chrome* || "$exec_cmd" == firefox* ]]; then
+        :
+      elif [[ -n "$app_id" ]]; then
+        if hyprctl clients -j 2>/dev/null | jq -e --arg ws "$ws" --arg appid "$app_id" '
+          def ws_ok($ws):
+            if ($ws|test("^[0-9]+$")) then
+              (.workspace.id == ($ws|tonumber) or .workspace.name == $ws)
+            else
+              .workspace.name == $ws
+            end;
+          any(.[]; ws_ok($ws) and ((.class|ascii_downcase)==($appid|ascii_downcase) or (.initialClass|ascii_downcase)==($appid|ascii_downcase)))
+        ' >/dev/null 2>&1; then
+          echo "skip $name on ws $ws — already running ($app_id)"
+          continue
+        fi
+      elif [[ -n "$basename" && "$basename" != "." ]]; then
+        if hyprctl clients -j 2>/dev/null | jq -e --arg ws "$ws" --arg bn "$basename" '
+          def ws_ok($ws):
+            if ($ws|test("^[0-9]+$")) then
+              (.workspace.id == ($ws|tonumber) or .workspace.name == $ws)
+            else
+              .workspace.name == $ws
+            end;
+          any(.[]; ws_ok($ws) and ((.class|ascii_downcase)==($bn|ascii_downcase) or (.initialClass|ascii_downcase)==($bn|ascii_downcase)))
+        ' >/dev/null 2>&1; then
+          echo "skip $name on ws $ws — already running ($basename)"
+          continue
+        fi
       fi
     fi
 

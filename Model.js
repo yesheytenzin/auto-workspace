@@ -25,14 +25,21 @@ function makeId() {
 }
 
 function defaultOnlyOnBootForType(type) {
-    return true
+    return type === "app" ? false : true
 }
 
 function normalizeAssignment(a) {
     var ws = parseInt(a.workspace, 10)
     if (!(ws >= 1 && ws <= 10) && String(a.workspace).indexOf("special:") !== 0) ws = 1
     var type = (a.type === "webapp" || a.type === "app" || a.type === "custom") ? a.type : "app"
-    var onlyOnBoot = true
+    var onlyOnBoot = defaultOnlyOnBootForType(type)
+    if (typeof a.onlyOnBoot === "boolean") {
+        onlyOnBoot = a.onlyOnBoot
+    } else if (a.onlyOnBoot === 1 || a.onlyOnBoot === "1" || a.onlyOnBoot === "true") {
+        onlyOnBoot = true
+    } else if (a.onlyOnBoot === 0 || a.onlyOnBoot === "0" || a.onlyOnBoot === "false") {
+        onlyOnBoot = false
+    }
     return {
         id: String(a.id || makeId()),
         workspace: ws,
@@ -57,20 +64,8 @@ function sanitizeConfig(cfg) {
         out.settings.lastFormWorkspace = Math.max(1, Math.min(10, parseInt(cfg.settings.lastFormWorkspace) || 1))
     }
     if (Array.isArray(cfg.assignments)) {
-        // Backfill: existing assignments without onlyOnBoot inherit global or type default
-        var globalOnly = out.settings.onlyOnBoot
         out.assignments = cfg.assignments.slice(0, 50).map(function(raw){
-            // If raw already has onlyOnBoot, normalize will keep it; else use type default
-            // but if no per-item value and global was false, keep type default logic inside normalize
-            // For migration: if raw lacks onlyOnBoot and global was false, app types would get false anyway
-            // so we just call normalize which applies type defaults. To respect old global for migration,
-            // we inject global as fallback for items lacking explicit value:
-            var copy = clone(raw)
-            if (copy.onlyOnBoot === undefined || copy.onlyOnBoot === null) {
-                // Old config: use type default, not global, for best new behavior
-                // (global remains fallback for script's clients check)
-            }
-            return normalizeAssignment(copy)
+            return normalizeAssignment(clone(raw))
         })
     }
     out.version = 1
