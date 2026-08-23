@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "tenzin.auto-workspace",
   "name": "Auto Workspace",
-  "version": "2.0.1",
+  "version": "2.1.0",
   "author": "tenzin",
   "license": "MIT",
   "description": "Auto-launch apps on workspaces at boot — assign YouTube to WS1, Code to WS2, etc. Supports multiple apps per workspace.",
