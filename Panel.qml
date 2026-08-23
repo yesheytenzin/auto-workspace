@@ -45,6 +45,10 @@ Panel {
     property bool fillingName: false
     onFormTypeChanged: { updateFormPreview(); updateAutofillName() }
 
+    // Actual Hyprland layout for preview — polled from hyprctl
+    property string hyprLayout: "dwindle"
+    property real hyprColumnWidth: 0.49
+
     // --- keyboard cursor model (plugin-manager pattern) ---
     property bool cursorActive: false
     property int selectedRow: 0
@@ -61,7 +65,7 @@ Panel {
         return n
     })()
 
-    function open() { root.controller.show(); loadConfig(); root.workspacePicked = true }
+    function open() { root.controller.show(); loadConfig(); layoutProc.running = true; root.workspacePicked = true }
     function close() { root.controller.hide() }
     function toggle() { root.opened ? root.close() : root.open() }
     function closeForPopoutSwitch() { root.close() }
@@ -71,7 +75,7 @@ Panel {
         return false
     }
 
-    function loadConfig() { loading=true; errorText=""; loadProc.running=true }
+    function loadConfig() { loading=true; errorText=""; loadProc.running=true; if (!layoutProc.running) layoutProc.running = true }
     function saveConfig() {
         var cfg = Model.sanitizeConfig(config)
         cfg.assignments = assignments.slice(0, 50)
@@ -267,6 +271,20 @@ Panel {
         }
     }
     Process { id: refreshServiceProc; command: ["bash","-c","omarchy-shell -q tenzin.auto-workspace refreshConfig >/dev/null 2>&1 || true"] }
+    Process {
+        id: layoutProc
+        command: ["bash", "-c", "layout=$(hyprctl getoption general:layout -j 2>/dev/null | jq -r '.str // empty' 2>/dev/null); col=$(hyprctl getoption scrolling:column_width -j 2>/dev/null | jq -r '.float // 0.49' 2>/dev/null); echo \"${layout:-dwindle}|${col:-0.49}\""]
+        stdout: StdioCollector { id: layoutOut; waitForEnd: true }
+        onExited: function(code) {
+            if (code !== 0) return
+            var txt = (layoutOut.text || "").trim()
+            if (!txt) return
+            var parts = txt.split("|")
+            if (parts[0]) root.hyprLayout = parts[0].trim()
+            var cw = parseFloat(parts[1])
+            if (!isNaN(cw) && cw > 0.1 && cw < 1.0) root.hyprColumnWidth = cw
+        }
+    }
     Process {
         id: appsProc
         command: ["bash", root.script, "--list-apps"]
@@ -564,6 +582,21 @@ Panel {
                             appList: root.appList
                             screenW: panel.screenW
                             screenH: panel.screenH
+                            hyprLayout: root.hyprLayout
+                            columnWidth: root.hyprColumnWidth
+                        }
+                        Text {
+                            Layout.fillWidth: true
+                            wrapMode: Text.WordWrap
+                            text: root.hyprLayout === "scrolling"
+                                  ? "Scrolling layout: windows sit side-by-side (" + Math.round(root.hyprColumnWidth*100) + "% cols) — scroll horizontally to see all " + root.addedApps.length + ". Toggle with SUPER+L."
+                                  : root.hyprLayout === "master"
+                                  ? "Master layout: left master + right stack."
+                                  : "Dwindle layout: binary split tiling."
+                            color: root.dim
+                            font.family: root.fontFamily
+                            font.pixelSize: Style.font.caption - 1
+                            visible: root.addedApps.length > 1
                         }
                     }
                 }
@@ -677,5 +710,5 @@ Panel {
         }
     }
 
-    Component.onCompleted: { loadConfig(); appsProc.running = true }
+    Component.onCompleted: { loadConfig(); appsProc.running = true; layoutProc.running = true }
 }
