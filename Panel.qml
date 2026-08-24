@@ -48,6 +48,25 @@ Panel {
     // Actual Hyprland layout for preview — polled from hyprctl
     property string hyprLayout: "dwindle"
     property real hyprColumnWidth: 0.49
+    // Real Hyprland general/decoration/master options (effective values)
+    property real hyprGapsIn: 5
+    property real hyprGapsOut: 10
+    property real hyprBorder: 2
+    property int hyprRounding: 0
+    property real hyprMfact: 0.55
+    // Focused monitor logical size (physical ÷ scale)
+    property real hyprScale: 1.0
+    property int monW: 0
+    property int monH: 0
+    // Windows actually tiled on the picked workspace right now
+    property var liveWindows: []
+    function refreshLive() {
+        var ws = Number(formWorkspace) || 1
+        liveProc.command = ["bash", "-c",
+            "ws=" + ws + "; hyprctl clients -j 2>/dev/null | jq -c --argjson ws $ws '[.[] | select(.workspace.id == $ws) | {at: .at, size: .size}]' 2>/dev/null || echo []"]
+        liveProc.running = true
+    }
+    onFormWorkspaceChanged: if (root.opened) root.refreshLive()
 
     // --- keyboard cursor model (plugin-manager pattern) ---
     property bool cursorActive: false
@@ -65,7 +84,7 @@ Panel {
         return n
     })()
 
-    function open() { root.controller.show(); loadConfig(); layoutProc.running = true; root.workspacePicked = true }
+    function open() { root.controller.show(); loadConfig(); layoutProc.running = true; refreshLive(); root.workspacePicked = true }
     function close() { root.controller.hide() }
     function toggle() { root.opened ? root.close() : root.open() }
     function closeForPopoutSwitch() { root.close() }
@@ -273,7 +292,22 @@ Panel {
     Process { id: refreshServiceProc; command: ["bash","-c","omarchy-shell -q tenzin.auto-workspace refreshConfig >/dev/null 2>&1 || true"] }
     Process {
         id: layoutProc
-        command: ["bash", "-c", "layout=$(hyprctl getoption general:layout -j 2>/dev/null | jq -r '.str // empty' 2>/dev/null); col=$(hyprctl getoption scrolling:column_width -j 2>/dev/null | jq -r '.float // 0.49' 2>/dev/null); echo \"${layout:-dwindle}|${col:-0.49}\""]
+        // Collect every Hyprland fact the preview needs in one call: layout,
+        // column_width, gaps_in/out, border_size, rounding, master:mfact and
+        // the focused monitor's logical size. jq '.float'/'.css' return the
+        // EFFECTIVE value even when the option was not explicitly set.
+        command: ["bash", "-c",
+            "L=$(hyprctl getoption general:layout -j 2>/dev/null | jq -r '.str // empty'); " +
+            "C=$(hyprctl getoption scrolling:column_width -j 2>/dev/null | jq -r '.float // 0.49'); " +
+            "GI=$(hyprctl getoption general:gaps_in -j 2>/dev/null | jq -r '(.css // \"5\") | split(\" \")[0] | (tonumber? // 5)'); " +
+            "GO=$(hyprctl getoption general:gaps_out -j 2>/dev/null | jq -r '(.css // \"10\") | split(\" \")[0] | (tonumber? // 10)'); " +
+            "B=$(hyprctl getoption general:border_size -j 2>/dev/null | jq -r '.int // 2'); " +
+            "R=$(hyprctl getoption decoration:rounding -j 2>/dev/null | jq -r '.int // 0'); " +
+            "MF=$(hyprctl getoption master:mfact -j 2>/dev/null | jq -r '.float // 0.55'); " +
+            "S=$(hyprctl monitors -j 2>/dev/null | jq -r '([.[] | select(.focused == true)][0] // .[0] // {}).scale // 1'); " +
+            "MW=$(hyprctl monitors -j 2>/dev/null | jq -r '([.[] | select(.focused == true)][0] // .[0] // {}).width // 1920'); " +
+            "MH=$(hyprctl monitors -j 2>/dev/null | jq -r '([.[] | select(.focused == true)][0] // .[0] // {}).height // 1080'); " +
+            "echo \"${L:-dwindle}|${C:-0.49}|${GI:-5}|${GO:-10}|${B:-2}|${R:-0}|${MF:-0.55}|${S:-1}|${MW:-1920}|${MH:-1080}\""]
         stdout: StdioCollector { id: layoutOut; waitForEnd: true }
         onExited: function(code) {
             if (code !== 0) return
@@ -281,10 +315,29 @@ Panel {
             if (!txt) return
             var parts = txt.split("|")
             if (parts[0]) root.hyprLayout = parts[0].trim()
-            var cw = parseFloat(parts[1])
-            if (!isNaN(cw) && cw > 0.1 && cw < 1.0) root.hyprColumnWidth = cw
+            var num = function(s, def) { var v = parseFloat(s); return isNaN(v) ? def : v }
+            var cw = num(parts[1], 0.49); if (cw > 0.1 && cw < 1.0) root.hyprColumnWidth = cw
+            var gi = num(parts[2], 5);   if (gi >= 0 && gi < 100) root.hyprGapsIn = gi
+            var go = num(parts[3], 10);  if (go >= 0 && go < 200) root.hyprGapsOut = go
+            var b = num(parts[4], 2);    if (b >= 0 && b < 20) root.hyprBorder = b
+            var r = num(parts[5], 0);    if (r >= 0 && r < 50) root.hyprRounding = Math.round(r)
+            var mf = num(parts[6], 0.55); if (mf > 0.05 && mf < 0.95) root.hyprMfact = mf
+            var sc = num(parts[7], 1);   if (sc >= 0.5 && sc <= 4) root.hyprScale = sc
+            var mw = Math.round(num(parts[8], 0) / root.hyprScale); if (mw > 100) root.monW = mw
+            var mh = Math.round(num(parts[9], 0) / root.hyprScale); if (mh > 100) root.monH = mh
         }
     }
+    Process {
+        id: liveProc
+        stdout: StdioCollector { id: liveOut; waitForEnd: true }
+        onExited: function(code) {
+            if (code !== 0) return
+            try { root.liveWindows = JSON.parse(liveOut.text || "[]") } catch(e) { root.liveWindows = [] }
+        }
+    }
+    // Keep layout facts + live windows fresh while the panel is visible
+    Timer { id: layoutRefreshTimer; interval: 5000; repeat: true; running: root.opened; onTriggered: if (!layoutProc.running) layoutProc.running = true }
+    Timer { id: liveRefreshTimer; interval: 2000; repeat: true; running: root.opened; onTriggered: root.refreshLive() }
     Process {
         id: appsProc
         command: ["bash", root.script, "--list-apps"]
@@ -584,6 +637,18 @@ Panel {
                             screenH: panel.screenH
                             hyprLayout: root.hyprLayout
                             columnWidth: root.hyprColumnWidth
+                            hyprGapsIn: root.hyprGapsIn
+                            hyprGapsOut: root.hyprGapsOut
+                            hyprBorder: root.hyprBorder
+                            hyprRounding: root.hyprRounding
+                            hyprMfact: root.hyprMfact
+                            hyprScale: root.hyprScale
+                            monW: root.monW
+                            monH: root.monH
+                            barPos: panel.barPos
+                            barSizeH: panel.barH
+                            barSizeW: panel.barW
+                            liveWindows: root.liveWindows
                         }
                         Text {
                             Layout.fillWidth: true
