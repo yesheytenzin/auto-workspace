@@ -58,15 +58,6 @@ Panel {
     property real hyprScale: 1.0
     property int monW: 0
     property int monH: 0
-    // Windows actually tiled on the picked workspace right now
-    property var liveWindows: []
-    function refreshLive() {
-        var ws = Number(formWorkspace) || 1
-        liveProc.command = ["bash", "-c",
-            "ws=" + ws + "; hyprctl clients -j 2>/dev/null | jq -c --argjson ws $ws '[.[] | select(.workspace.id == $ws) | {at: .at, size: .size}]' 2>/dev/null || echo []"]
-        liveProc.running = true
-    }
-    onFormWorkspaceChanged: if (root.opened) root.refreshLive()
 
     // --- keyboard cursor model (plugin-manager pattern) ---
     property bool cursorActive: false
@@ -84,7 +75,7 @@ Panel {
         return n
     })()
 
-    function open() { root.controller.show(); loadConfig(); layoutProc.running = true; refreshLive(); root.workspacePicked = true }
+    function open() { root.controller.show(); loadConfig(); layoutProc.running = true; root.workspacePicked = true }
     function close() { root.controller.hide() }
     function toggle() { root.opened ? root.close() : root.open() }
     function closeForPopoutSwitch() { root.close() }
@@ -327,17 +318,33 @@ Panel {
             var mh = Math.round(num(parts[9], 0) / root.hyprScale); if (mh > 100) root.monH = mh
         }
     }
+    // Switch Hyprland's actual layout (runtime only — until config reload)
     Process {
-        id: liveProc
-        stdout: StdioCollector { id: liveOut; waitForEnd: true }
+        id: layoutToggleProc
+        stdout: StdioCollector { waitForEnd: true }
+        stderr: StdioCollector { id: layoutToggleErr; waitForEnd: true }
         onExited: function(code) {
-            if (code !== 0) return
-            try { root.liveWindows = JSON.parse(liveOut.text || "[]") } catch(e) { root.liveWindows = [] }
+            if (code !== 0) {
+                root.statusText = "Layout switch failed"
+                clearStatusTimer.restart()
+                return
+            }
+            root.statusText = "Layout switched"
+            clearStatusTimer.restart()
+            if (!layoutProc.running) layoutProc.running = true
         }
     }
-    // Keep layout facts + live windows fresh while the panel is visible
+    function toggleHyprLayout() {
+        var target = root.hyprLayout === "scrolling" ? "dwindle" : "scrolling"
+        statusText = "Switching to " + target + "..."
+        // This Hyprland build uses the Lua config parser — hyprctl keyword is
+        // rejected, so set the option via hl.config(). Runtime only.
+        layoutToggleProc.command = ["bash", "-c",
+            "hyprctl eval 'hl.config({general = {layout = \"" + target + "\"}})' >/dev/null 2>&1"]
+        layoutToggleProc.running = true
+    }
+    // Keep layout facts fresh while the panel is visible
     Timer { id: layoutRefreshTimer; interval: 5000; repeat: true; running: root.opened; onTriggered: if (!layoutProc.running) layoutProc.running = true }
-    Timer { id: liveRefreshTimer; interval: 2000; repeat: true; running: root.opened; onTriggered: root.refreshLive() }
     Process {
         id: appsProc
         command: ["bash", root.script, "--list-apps"]
@@ -399,6 +406,26 @@ Panel {
         var out=[]
         for(var i=0;i<assignments.length;i++) if(assignments[i].workspace===ws) out.push(assignments[i])
         return out
+    }
+    // Move an app within a workspace's launch/tiling order (drag & drop on preview).
+    // fromLocal/toLocal are indices into that workspace's filtered list.
+    function reorderAssignment(ws, fromLocal, toLocal) {
+        var wsIdx = []
+        for (var i = 0; i < assignments.length; i++)
+            if (assignments[i].workspace === ws) wsIdx.push(i)
+        if (fromLocal < 0 || fromLocal >= wsIdx.length || toLocal < 0 || toLocal >= wsIdx.length || fromLocal === toLocal) return
+        console.log("[auto-workspace] reorder ws=" + ws + " " + fromLocal + " -> " + toLocal + " (wsItems=" + wsIdx.length + ")")
+        var arr = assignments.slice()
+        var seq = []
+        for (var j = 0; j < wsIdx.length; j++) seq.push(arr[wsIdx[j]])
+        var moved = seq.splice(fromLocal, 1)[0]
+        seq.splice(toLocal, 0, moved)
+        for (var k = 0; k < wsIdx.length; k++) arr[wsIdx[k]] = seq[k]
+        assignments = arr
+        config.assignments = arr.slice()
+        saveConfig()
+        statusText = "Moved " + (moved.name || "app") + " to position " + (toLocal + 1)
+        clearStatusTimer.restart()
     }
     property var addedApps: {
         var out=[]
@@ -619,10 +646,21 @@ Panel {
                         Layout.alignment: Qt.AlignTop
                         spacing: Style.space(10)
 
-                        PanelSectionHeader {
-                            text: "PREVIEW"
-                            foreground: root.foreground
-                            fontFamily: root.fontFamily
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: Style.space(8)
+                            PanelSectionHeader {
+                                text: "PREVIEW"
+                                foreground: root.foreground
+                                fontFamily: root.fontFamily
+                                Layout.fillWidth: true
+                            }
+                            Button {
+                                text: root.hyprLayout === "scrolling" ? "⇄ dwindle" : "⇄ scrolling"
+                                tooltipText: "Switch Hyprland layout now (runtime only — resets on config reload)"
+                                verticalPadding: Style.space(4)
+                                onClicked: root.toggleHyprLayout()
+                            }
                         }
 
                         WorkspacePreview {
@@ -648,16 +686,17 @@ Panel {
                             barPos: panel.barPos
                             barSizeH: panel.barH
                             barSizeW: panel.barW
-                            liveWindows: root.liveWindows
+                            onMoveApp: function(fromIdx, toIdx) { root.reorderAssignment(root.formWorkspace, fromIdx, toIdx) }
                         }
                         Text {
                             Layout.fillWidth: true
                             wrapMode: Text.WordWrap
-                            text: root.hyprLayout === "scrolling"
-                                  ? "Scrolling layout: windows sit side-by-side (" + Math.round(root.hyprColumnWidth*100) + "% cols) — scroll horizontally to see all " + root.addedApps.length + ". Toggle with SUPER+L."
+                            text: (root.hyprLayout === "scrolling"
+                                  ? "Scrolling layout: windows sit side-by-side (" + Math.round(root.hyprColumnWidth*100) + "% cols) — scroll horizontally to see all " + root.addedApps.length + "."
                                   : root.hyprLayout === "master"
                                   ? "Master layout: left master + right stack."
-                                  : "Dwindle layout: binary split tiling."
+                                  : "Dwindle layout: binary split tiling.")
+                                  + " Tip: drag a tile onto another to reorder · ⇄ button switches layout."
                             color: root.dim
                             font.family: root.fontFamily
                             font.pixelSize: Style.font.caption - 1

@@ -39,8 +39,6 @@ Item {
     property string barPos: "top"
     property real barSizeH: 0 // bar thickness if horizontal bar (KeyboardPanel.barH)
     property real barSizeW: 0 // bar thickness if vertical bar (KeyboardPanel.barW)
-    // Windows actually tiled on this workspace right now (hyprctl clients -j)
-    property var liveWindows: []
 
     readonly property bool barHorizontal: root.barPos === "top" || root.barPos === "bottom"
     readonly property real effMonW: root.monW > 0 ? root.monW : root.screenW
@@ -152,6 +150,62 @@ Item {
     implicitWidth: 320
     implicitHeight: previewBox.implicitHeight + 28
 
+    // --- drag & drop reorder -------------------------------------------------
+    // Dragging a tile onto another tile moves that app to the dropped
+    // position in the launch/tiling order (same workspace).
+    signal moveApp(int fromIdx, int toIdx)
+    property int dragIndex: -1
+    property bool dragIsScrolling: false
+    property rect dragSourceRect: Qt.rect(0, 0, 0, 0)
+    property point dragGrab: Qt.point(0, 0)
+    property point dragPoint: Qt.point(0, 0)
+    readonly property bool dragging: dragIndex >= 0
+    readonly property var dragApp: dragging && assignedApps ? (assignedApps[dragIndex] || null) : null
+
+    function beginDrag(idx, isScrolling, srcRect, item, mx, my) {
+        console.log("[auto-workspace] drag begin idx=" + idx)
+        dragIndex = idx
+        dragIsScrolling = isScrolling
+        dragSourceRect = srcRect
+        var p0 = item.mapToItem(tilesContainer, mx, my)
+        dragGrab = Qt.point(p0.x - srcRect.x, p0.y - srcRect.y)
+        dragPoint = p0
+    }
+    function updateDrag(item, mx, my) {
+        if (!dragging) return
+        dragPoint = item.mapToItem(tilesContainer, mx, my)
+    }
+    function endDrag() {
+        if (!dragging) return
+        var from = dragIndex
+        var x = dragPoint.x, y = dragPoint.y
+        dragIndex = -1
+        var to = -1
+        if (dragIsScrolling) {
+            // invert colX(): column index under the drop point
+            var step = scrollingStrip.colW + scrollingStrip.gap
+            to = Math.round((x - scrollingStrip.centerX) / step) + (tilesContainer.count - 1)
+        } else {
+            // tile containing the drop point, else nearest tile center
+            var best = -1, bestD = Infinity
+            for (var i = 0; i < tiledRects.length; i++) {
+                var r = tiledRects[i]
+                if (x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) { best = i; break }
+                var dx = r.x + r.w / 2 - x, dy = r.y + r.h / 2 - y
+                var d = dx * dx + dy * dy
+                if (d < bestD) { bestD = d; best = i }
+            }
+            to = best
+        }
+        if (to >= 0 && to !== from && to < tilesContainer.count) {
+            console.log("[auto-workspace] drag end from=" + from + " to=" + to)
+            moveApp(from, to)
+        } else {
+            console.log("[auto-workspace] drag cancelled from=" + from + " to=" + to + " count=" + tilesContainer.count)
+        }
+    }
+    onAssignedAppsChanged: dragIndex = -1
+
     ColumnLayout {
         anchors.fill: parent
         spacing: 4
@@ -213,20 +267,6 @@ Item {
                 horizontalAlignment: Text.AlignHCenter
             }
 
-            // Live indicator — real windows currently on this workspace
-            Text {
-                visible: root.liveWindows.length > 0
-                anchors.top: parent.top
-                anchors.right: parent.right
-                anchors.topMargin: 4
-                anchors.rightMargin: 6
-                text: "● live " + root.liveWindows.length
-                color: Color.accent
-                font.family: Style.font.family
-                font.pixelSize: Style.font.caption - 2
-                font.bold: true
-            }
-
             Item {
                 id: tilesContainer
                 anchors.fill: parent
@@ -265,8 +305,20 @@ Item {
                             border.width: 1
                             border.color: modelData.enabled ? Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.45) : Qt.rgba(Color.foreground.r, Color.foreground.g, Color.foreground.b, 0.15)
                             // dim columns peeking past the edges → hints scroll
-                            opacity: scrollingStrip.fullyVisible(index) ? 1.0 : 0.55
+                            opacity: root.dragging && index === root.dragIndex ? 0.25 : (scrollingStrip.fullyVisible(index) ? 1.0 : 0.55)
                             clip: true
+                            MouseArea {
+                                id: scrollMa
+                                anchors.fill: parent
+                                acceptedButtons: Qt.LeftButton
+                                cursorShape: root.dragging ? Qt.ClosedHandCursor : Qt.OpenHandCursor
+                                onPressed: function(mouse) {
+                                    root.beginDrag(index, true, Qt.rect(scrollingStrip.colX(index), 0, parent.width, parent.height), scrollMa, mouse.x, mouse.y)
+                                }
+                                onPositionChanged: function(mouse) { root.updateDrag(scrollMa, mouse.x, mouse.y) }
+                                onReleased: root.endDrag()
+                                onCanceled: root.endDrag()
+                            }
                             ColumnLayout {
                                 anchors.fill: parent
                                 anchors.margins: 4
@@ -322,6 +374,7 @@ Item {
                     model: root.tiledRects
                     delegate: Rectangle {
                         required property var modelData
+                        required property int index
                         x: modelData.x
                         y: modelData.y
                         width: modelData.w
@@ -331,6 +384,20 @@ Item {
                         border.width: 1
                         border.color: modelData.app.enabled ? Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.45) : Qt.rgba(Color.foreground.r, Color.foreground.g, Color.foreground.b, 0.15)
                         clip: true
+                        // source slot dims while its tile is being dragged
+                        opacity: root.dragging && index === root.dragIndex ? 0.25 : 1.0
+                        MouseArea {
+                            id: tileMa
+                            anchors.fill: parent
+                            acceptedButtons: Qt.LeftButton
+                            cursorShape: root.dragging ? Qt.ClosedHandCursor : Qt.OpenHandCursor
+                            onPressed: function(mouse) {
+                                root.beginDrag(index, false, Qt.rect(modelData.x, modelData.y, modelData.w, modelData.h), tileMa, mouse.x, mouse.y)
+                            }
+                            onPositionChanged: function(mouse) { root.updateDrag(tileMa, mouse.x, mouse.y) }
+                            onReleased: root.endDrag()
+                            onCanceled: root.endDrag()
+                        }
                         ColumnLayout {
                             anchors.fill: parent
                             anchors.margins: 4
@@ -368,28 +435,42 @@ Item {
                         }
                     }
                 }
-            }
 
-            // Live windows actually tiled on this workspace right now — thin
-            // outlines mapped from real hyprctl clients coordinates into
-            // preview space (monitor coords minus gaps_out/bar, scaled).
-            Repeater {
-                model: root.liveWindows
-                delegate: Rectangle {
-                    required property var modelData
-                    readonly property real ox: root.hyprGapsOut + (root.barHorizontal ? 0 : root.barSizeW)
-                    readonly property real oy: root.hyprGapsOut + (root.barHorizontal ? root.barSizeH : 0)
-                    readonly property real lx: root.pxScale > 0 && modelData.at ? (modelData.at[0] - ox) * root.pxScale : 0
-                    readonly property real ly: root.pxScale > 0 && modelData.at ? (modelData.at[1] - oy) * root.pxScale : 0
-                    color: "transparent"
+                // Drag ghost — follows the pointer while a tile is reordered
+                Rectangle {
+                    id: dragGhost
+                    visible: root.dragging
+                    z: 50
+                    x: root.dragPoint.x - root.dragGrab.x
+                    y: root.dragPoint.y - root.dragGrab.y
+                    width: Math.max(24, root.dragSourceRect.width)
+                    height: Math.max(20, root.dragSourceRect.height)
+                    radius: Math.max(2, root.tileRadius)
+                    color: Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.32)
                     border.width: 1
-                    border.color: Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.85)
-                    radius: root.tileRadius
-                    x: Math.max(-2, lx)
-                    y: Math.max(-2, ly)
-                    width: root.pxScale > 0 && modelData.size ? Math.max(4, modelData.size[0] * root.pxScale) : 0
-                    height: root.pxScale > 0 && modelData.size ? Math.max(4, modelData.size[1] * root.pxScale) : 0
-                    visible: root.pxScale > 0 && width > 4 && height > 4
+                    border.color: Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.8)
+                    opacity: 0.9
+                    ColumnLayout {
+                        anchors.centerIn: parent
+                        spacing: 2
+                        Image {
+                            Layout.alignment: Qt.AlignHCenter
+                            Layout.preferredWidth: 16
+                            Layout.preferredHeight: 16
+                            visible: source !== ""
+                            source: root.dragApp ? root.iconSourceFor(root.dragApp.exec || root.dragApp.command) : ""
+                            fillMode: Image.PreserveAspectFit
+                            asynchronous: true
+                            cache: true
+                        }
+                        Text {
+                            text: root.dragApp ? (root.dragApp.name || "App") : ""
+                            color: Color.foreground
+                            font.family: Style.font.family
+                            font.pixelSize: Style.font.caption - 1
+                            font.bold: true
+                        }
+                    }
                 }
             }
         }
