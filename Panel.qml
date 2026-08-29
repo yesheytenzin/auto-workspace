@@ -45,8 +45,13 @@ Panel {
     property bool fillingName: false
     onFormTypeChanged: { updateFormPreview(); updateAutofillName() }
 
-    // Actual Hyprland layout for preview — polled from hyprctl
-    property string hyprLayout: "dwindle"
+    // Global default plus per-workspace tiledLayout (Super+L / workspace_rule).
+    property string hyprLayoutDefault: "dwindle"
+    property var workspaceLayouts: ({})
+    readonly property string hyprLayout: {
+        var mapped = workspaceLayouts[String(formWorkspace)]
+        return mapped || hyprLayoutDefault
+    }
     property real hyprColumnWidth: 0.49
     // Real Hyprland general/decoration/master options (effective values)
     property real hyprGapsIn: 5
@@ -281,31 +286,32 @@ Panel {
         }
     }
     Process { id: refreshServiceProc; command: ["bash","-c","omarchy-shell -q tenzin.auto-workspace refreshConfig >/dev/null 2>&1 || true"] }
+    function parseWorkspaceLayouts(s) {
+        var out = {}
+        if (!s) return out
+        var pairs = s.split(",")
+        for (var i = 0; i < pairs.length; i++) {
+            var p = pairs[i].trim()
+            if (!p) continue
+            var idx = p.indexOf(":")
+            if (idx < 1) continue
+            var id = p.slice(0, idx)
+            var lay = p.slice(idx + 1).trim()
+            if (id && lay) out[id] = lay
+        }
+        return out
+    }
     Process {
         id: layoutProc
-        // Collect every Hyprland fact the preview needs in one call: layout,
-        // column_width, gaps_in/out, border_size, rounding, master:mfact and
-        // the focused monitor's logical size. jq '.float'/'.css' return the
-        // EFFECTIVE value even when the option was not explicitly set.
-        command: ["bash", "-c",
-            "L=$(hyprctl getoption general:layout -j 2>/dev/null | jq -r '.str // empty'); " +
-            "C=$(hyprctl getoption scrolling:column_width -j 2>/dev/null | jq -r '.float // 0.49'); " +
-            "GI=$(hyprctl getoption general:gaps_in -j 2>/dev/null | jq -r '(.css // \"5\") | split(\" \")[0] | (tonumber? // 5)'); " +
-            "GO=$(hyprctl getoption general:gaps_out -j 2>/dev/null | jq -r '(.css // \"10\") | split(\" \")[0] | (tonumber? // 10)'); " +
-            "B=$(hyprctl getoption general:border_size -j 2>/dev/null | jq -r '.int // 2'); " +
-            "R=$(hyprctl getoption decoration:rounding -j 2>/dev/null | jq -r '.int // 0'); " +
-            "MF=$(hyprctl getoption master:mfact -j 2>/dev/null | jq -r '.float // 0.55'); " +
-            "S=$(hyprctl monitors -j 2>/dev/null | jq -r '([.[] | select(.focused == true)][0] // .[0] // {}).scale // 1'); " +
-            "MW=$(hyprctl monitors -j 2>/dev/null | jq -r '([.[] | select(.focused == true)][0] // .[0] // {}).width // 1920'); " +
-            "MH=$(hyprctl monitors -j 2>/dev/null | jq -r '([.[] | select(.focused == true)][0] // .[0] // {}).height // 1080'); " +
-            "echo \"${L:-dwindle}|${C:-0.49}|${GI:-5}|${GO:-10}|${B:-2}|${R:-0}|${MF:-0.55}|${S:-1}|${MW:-1920}|${MH:-1080}\""]
+        // Global options plus per-workspace tiledLayout (and Super+L persist files).
+        command: ["bash", root.script, "--hypr-facts"]
         stdout: StdioCollector { id: layoutOut; waitForEnd: true }
         onExited: function(code) {
             if (code !== 0) return
             var txt = (layoutOut.text || "").trim()
             if (!txt) return
             var parts = txt.split("|")
-            if (parts[0]) root.hyprLayout = parts[0].trim()
+            if (parts[0]) root.hyprLayoutDefault = parts[0].trim()
             var num = function(s, def) { var v = parseFloat(s); return isNaN(v) ? def : v }
             var cw = num(parts[1], 0.49); if (cw > 0.1 && cw < 1.0) root.hyprColumnWidth = cw
             var gi = num(parts[2], 5);   if (gi >= 0 && gi < 100) root.hyprGapsIn = gi
@@ -316,31 +322,34 @@ Panel {
             var sc = num(parts[7], 1);   if (sc >= 0.5 && sc <= 4) root.hyprScale = sc
             var mw = Math.round(num(parts[8], 0) / root.hyprScale); if (mw > 100) root.monW = mw
             var mh = Math.round(num(parts[9], 0) / root.hyprScale); if (mh > 100) root.monH = mh
+            if (parts.length > 10) root.workspaceLayouts = root.parseWorkspaceLayouts(parts.slice(10).join("|"))
         }
     }
-    // Switch Hyprland's actual layout (runtime only — until config reload)
+    // Switch the selected workspace's layout (same persist path as Super+L).
     Process {
         id: layoutToggleProc
         stdout: StdioCollector { waitForEnd: true }
         stderr: StdioCollector { id: layoutToggleErr; waitForEnd: true }
         onExited: function(code) {
             if (code !== 0) {
-                root.statusText = "Layout switch failed"
+                root.statusText = "Layout switch failed" + (layoutToggleErr.text ? ": " + layoutToggleErr.text.trim() : "")
                 clearStatusTimer.restart()
+                if (!layoutProc.running) layoutProc.running = true
                 return
             }
-            root.statusText = "Layout switched"
             clearStatusTimer.restart()
             if (!layoutProc.running) layoutProc.running = true
         }
     }
     function toggleHyprLayout() {
+        var ws = root.formWorkspace
         var target = root.hyprLayout === "scrolling" ? "dwindle" : "scrolling"
-        statusText = "Switching to " + target + "..."
-        // This Hyprland build uses the Lua config parser — hyprctl keyword is
-        // rejected, so set the option via hl.config(). Runtime only.
-        layoutToggleProc.command = ["bash", "-c",
-            "hyprctl eval 'hl.config({general = {layout = \"" + target + "\"}})' >/dev/null 2>&1"]
+        var map = {}
+        for (var k in root.workspaceLayouts) map[k] = root.workspaceLayouts[k]
+        map[String(ws)] = target
+        root.workspaceLayouts = map
+        statusText = "WS" + ws + " → " + target
+        layoutToggleProc.command = ["bash", root.script, "--set-workspace-layout", String(ws), target]
         layoutToggleProc.running = true
     }
     // Keep layout facts fresh while the panel is visible
@@ -657,7 +666,7 @@ Panel {
                             }
                             Button {
                                 text: root.hyprLayout === "scrolling" ? "⇄ dwindle" : "⇄ scrolling"
-                                tooltipText: "Switch Hyprland layout now (runtime only — resets on config reload)"
+                                tooltipText: "Toggle WS" + root.formWorkspace + " between dwindle and scrolling (saved, same as Super+L)"
                                 verticalPadding: Style.space(4)
                                 onClicked: root.toggleHyprLayout()
                             }
@@ -692,11 +701,11 @@ Panel {
                             Layout.fillWidth: true
                             wrapMode: Text.WordWrap
                             text: (root.hyprLayout === "scrolling"
-                                  ? "Scrolling layout: windows sit side-by-side (" + Math.round(root.hyprColumnWidth*100) + "% cols) — scroll horizontally to see all " + root.addedApps.length + "."
+                                  ? "WS" + root.formWorkspace + " scrolling: windows sit side-by-side (" + Math.round(root.hyprColumnWidth*100) + "% cols) — scroll horizontally to see all " + root.addedApps.length + "."
                                   : root.hyprLayout === "master"
-                                  ? "Master layout: left master + right stack."
-                                  : "Dwindle layout: binary split tiling.")
-                                  + " Tip: drag a tile onto another to reorder · ⇄ button switches layout."
+                                  ? "WS" + root.formWorkspace + " master: left master + right stack."
+                                  : "WS" + root.formWorkspace + " dwindle: binary split tiling.")
+                                  + " Tip: drag a tile onto another to reorder · ⇄ button switches this workspace only."
                             color: root.dim
                             font.family: root.fontFamily
                             font.pixelSize: Style.font.caption - 1
