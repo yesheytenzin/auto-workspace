@@ -486,6 +486,66 @@ cmd_launch_all() {
   echo "done"
 }
 
+# Hyprland facts for the panel preview. Last field is per-workspace layouts
+# (id:layout,...), matching Super+L / omarchy-hyprland-workspace-layout-toggle.
+cmd_hypr_facts() {
+  local L C GI GO B R MF S MW MH
+  L=$(hyprctl getoption general:layout -j 2>/dev/null | jq -r '.str // empty')
+  C=$(hyprctl getoption scrolling:column_width -j 2>/dev/null | jq -r '.float // 0.49')
+  GI=$(hyprctl getoption general:gaps_in -j 2>/dev/null | jq -r '(.css // "5") | split(" ")[0] | (tonumber? // 5)')
+  GO=$(hyprctl getoption general:gaps_out -j 2>/dev/null | jq -r '(.css // "10") | split(" ")[0] | (tonumber? // 10)')
+  B=$(hyprctl getoption general:border_size -j 2>/dev/null | jq -r '.int // 2')
+  R=$(hyprctl getoption decoration:rounding -j 2>/dev/null | jq -r '.int // 0')
+  MF=$(hyprctl getoption master:mfact -j 2>/dev/null | jq -r '.float // 0.55')
+  S=$(hyprctl monitors -j 2>/dev/null | jq -r '([.[] | select(.focused == true)][0] // .[0] // {}).scale // 1')
+  MW=$(hyprctl monitors -j 2>/dev/null | jq -r '([.[] | select(.focused == true)][0] // .[0] // {}).width // 1920')
+  MH=$(hyprctl monitors -j 2>/dev/null | jq -r '([.[] | select(.focused == true)][0] // .[0] // {}).height // 1080')
+
+  local -A layouts=()
+  local dir="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/workspace-layouts"
+  local f id lay
+  if [[ -d $dir ]]; then
+    for f in "$dir"/*.lua; do
+      [[ -f $f ]] || continue
+      id=$(basename "$f" .lua)
+      [[ $id =~ ^[0-9]+$ ]] || continue
+      lay=$(sed -n 's/.*layout = "\([^"]*\)".*/\1/p' "$f" | head -n1)
+      [[ -n $lay ]] && layouts[$id]=$lay
+    done
+  fi
+  while IFS=: read -r id lay; do
+    [[ -n $id && -n $lay && $lay != "null" ]] && layouts[$id]=$lay
+  done < <(hyprctl workspaces -j 2>/dev/null | jq -r '.[] | select(.id > 0) | "\(.id):\(.tiledLayout // empty)"')
+
+  local ws_pairs=""
+  for id in "${!layouts[@]}"; do
+    ws_pairs+="${ws_pairs:+,}${id}:${layouts[$id]}"
+  done
+
+  printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
+    "${L:-dwindle}" "${C:-0.49}" "${GI:-5}" "${GO:-10}" "${B:-2}" "${R:-0}" \
+    "${MF:-0.55}" "${S:-1}" "${MW:-1920}" "${MH:-1080}" "$ws_pairs"
+}
+
+# Persist and apply layout for one workspace — same files Super+L writes.
+cmd_set_workspace_layout() {
+  local ws="$1"
+  local layout="$2"
+  if ! [[ $ws =~ ^[0-9]+$ ]]; then
+    echo "invalid workspace: $ws" >&2
+    exit 1
+  fi
+  case "$layout" in
+    dwindle|scrolling|master) ;;
+    *) echo "invalid layout: $layout" >&2; exit 1 ;;
+  esac
+  local dir="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/workspace-layouts"
+  mkdir -p "$dir"
+  printf 'hl.workspace_rule({ workspace = "%s", layout = "%s" })\n' "$ws" "$layout" >"$dir/$ws.lua"
+  hyprctl eval "hl.workspace_rule({ workspace = \"$ws\", layout = \"$layout\" })" >/dev/null 2>&1 || \
+    hyprctl keyword workspace "$ws, layout:$layout"
+}
+
 case "${1:-}" in
   --ensure-config) cmd_ensure_config ;;
   --list-apps) cmd_list_apps ;;
@@ -494,6 +554,8 @@ case "${1:-}" in
   --launch-all) shift; cmd_launch_all "$@" ;;
   --force-launch-all) cmd_launch_all "true" ;;
   --default-config) default_config ;;
+  --hypr-facts) cmd_hypr_facts ;;
+  --set-workspace-layout) shift; cmd_set_workspace_layout "$@" ;;
   --help|-h|"") cat <<'HELP'
 auto-workspace.sh — helper for tenzin.auto-workspace
 
@@ -504,6 +566,9 @@ auto-workspace.sh — helper for tenzin.auto-workspace
   --launch-all [--force]  launch all enabled assignments (respects onlyOnBoot)
   --force-launch-all      always launch regardless of settings
   --default-config        print default config
+  --hypr-facts            print layout/gaps/monitor facts plus per-workspace layouts
+  --set-workspace-layout <ws> <dwindle|scrolling|master>
+                          set one workspace's layout (same persist path as Super+L)
 HELP
   ;;
   *) echo "unknown arg: $1" >&2; exit 1 ;;
