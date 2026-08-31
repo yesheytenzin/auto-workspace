@@ -57,7 +57,11 @@ Item {
 
     // px → preview-unit scale and derived metrics (clamped so the mini view
     // never collapses or explodes at extreme sizes)
-    readonly property real pxScale: tilesContainer.width > 0 && root.tileableW > 1 ? tilesContainer.width / root.tileableW : 0
+    // Shibumi-safe: fallback to previewBox width until tilesContainer is laid out (prevents blank on first frame / when Layout.fillWidth is 0)
+    readonly property real pxScale: {
+        var w = tilesContainer.width > 0 ? tilesContainer.width : (previewBox.width > 0 ? previewBox.width - 2*Math.max(4, Math.round(root.hyprGapsOut*0.08)) : 280)
+        return w > 0 && root.tileableW > 1 ? w / root.tileableW : (w > 0 ? w / 1920 : 0.15)
+    }
     readonly property int gapIn: Math.max(1, Math.min(8, Math.round(root.hyprGapsIn * pxScale)))
     readonly property int gapOut: Math.max(2, Math.min(16, Math.round(root.hyprGapsOut * pxScale)))
     readonly property int tileRadius: Math.max(0, Math.min(6, Math.round(root.hyprRounding * pxScale)))
@@ -135,8 +139,10 @@ Item {
     readonly property var tiledRects: {
         var n = root.assignedApps ? root.assignedApps.length : 0
         if (n === 0 || root.hyprLayout === "scrolling") return []
-        var W = tilesContainer.width, H = tilesContainer.height
-        if (!(W > 0) || !(H > 0)) return []
+        // Use previewBox fallback until tilesContainer is measured (Shibumi Layout can defer width)
+        var W = tilesContainer.width > 0 ? tilesContainer.width : (previewBox.width > 0 ? previewBox.width - 2*root.gapOut : 280)
+        var H = tilesContainer.height > 0 ? tilesContainer.height : (previewBox.height > 0 ? previewBox.height - 2*root.gapOut : Math.round(W * root.screenAspect))
+        if (!(W > 10) || !(H > 10)) return []
         var leaves = root.hyprLayout === "master" ? root.masterLeaves(n, W, H) : root.dwindleLeaves(n, W, H)
         var inset = Math.ceil(root.gapIn / 2) + root.borderPx
         var out = []
