@@ -105,7 +105,7 @@ Panel {
         config=cfg; assignments=cfg.assignments.slice()
         saveProc.pendingJson = JSON.stringify(cfg,null,2)
         if (saveProc.running) { saveProc.wantsSave = true; return }
-        saveProc.command=["bash","-c","mkdir -p \"$(dirname \"$1\")\"; printf '%s' \"$2\" > \"$1\"; cat \"$1\" | jq empty && echo OK || echo FAIL", "_", root.configFile, saveProc.pendingJson]
+        saveProc.command=["bash","-c","dir=\"$(dirname \"$1\")\"; mkdir -p \"$dir\"; if [[ -L \"$1\" || -L \"$dir\" ]]; then echo \"refusing symlink: $1\" >&2; exit 1; fi; tmp=\"$1.tmp.$$\"; printf '%s' \"$2\" > \"$tmp\" || exit 1; if [[ -L \"$1\" ]]; then rm -f \"$tmp\"; echo \"refusing symlink (race): $1\" >&2; exit 1; fi; mv -f \"$tmp\" \"$1\"; cat \"$1\" | jq empty && echo OK || echo FAIL", "_", root.configFile, saveProc.pendingJson]
         saveProc.running=true
     }
     function addAssignment() {
@@ -258,7 +258,7 @@ Panel {
 
     Process {
         id: loadProc
-        command: ["bash", "-c", "mkdir -p \"$(dirname \"$1\")\"; [[ -f \"$1\" || ! -f \"$3\" ]] || cp \"$3\" \"$1\"; [[ -f \"$1\" ]] || echo '{\"version\":1,\"settings\":{\"enabled\":true,\"launchDelayMs\":800,\"staggerMs\":400,\"silent\":true,\"onlyOnBoot\":true,\"lastFormWorkspace\":1},\"assignments\":[]}' > \"$1\"; cat \"$1\"", "_", root.configFile, "", root.legacyConfigFile]
+        command: ["bash", "-c", "dir=\"$(dirname \"$1\")\"; mkdir -p \"$dir\"; if [[ -L \"$1\" || -L \"$dir\" ]]; then echo \"refusing symlink: $1\" >&2; exit 1; fi; if [[ ! -f \"$1\" && -f \"$3\" ]]; then if [[ -L \"$3\" ]]; then echo \"refusing symlink source: $3\" >&2; exit 1; fi; tmp=\"$1.tmp.$$\"; cp -- \"$3\" \"$tmp\" || exit 1; if [[ -L \"$1\" ]]; then rm -f \"$tmp\"; echo \"refusing symlink (race): $1\" >&2; exit 1; fi; mv -f \"$tmp\" \"$1\"; fi; if [[ ! -f \"$1\" ]]; then tmp=\"$1.tmp.$$\"; printf '%s' '{\"version\":1,\"settings\":{\"enabled\":true,\"launchDelayMs\":800,\"staggerMs\":400,\"silent\":true,\"onlyOnBoot\":true,\"lastFormWorkspace\":1},\"assignments\":[]}' > \"$tmp\" || exit 1; if [[ -L \"$1\" ]]; then rm -f \"$tmp\"; echo \"refusing symlink (race): $1\" >&2; exit 1; fi; mv -f \"$tmp\" \"$1\"; fi; cat \"$1\"", "_", root.configFile, "", root.legacyConfigFile]
         stdout: StdioCollector { id: loadOut; waitForEnd: true }
         stderr: StdioCollector { id: loadErr; waitForEnd: true }
         onExited: function(code){
@@ -278,7 +278,7 @@ Panel {
             else root.errorText=""
             if (saveProc.wantsSave) {
                 saveProc.wantsSave=false
-                saveProc.command=["bash","-c","mkdir -p \"$(dirname \"$1\")\"; printf '%s' \"$2\" > \"$1\"; cat \"$1\" | jq empty && echo OK || echo FAIL", "_", root.configFile, saveProc.pendingJson]
+                saveProc.command=["bash","-c","dir=\"$(dirname \"$1\")\"; mkdir -p \"$dir\"; if [[ -L \"$1\" || -L \"$dir\" ]]; then echo \"refusing symlink: $1\" >&2; exit 1; fi; tmp=\"$1.tmp.$$\"; printf '%s' \"$2\" > \"$tmp\" || exit 1; if [[ -L \"$1\" ]]; then rm -f \"$tmp\"; echo \"refusing symlink (race): $1\" >&2; exit 1; fi; mv -f \"$tmp\" \"$1\"; cat \"$1\" | jq empty && echo OK || echo FAIL", "_", root.configFile, saveProc.pendingJson]
                 saveProc.running=true
             } else if (code===0) {
                 root.countsChanged(); refreshServiceProc.running=true

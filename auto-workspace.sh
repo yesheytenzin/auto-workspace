@@ -12,10 +12,33 @@ STATE_FILE="$STATE_DIR/state.json"
 
 mkdir -p "$STATE_DIR"
 
+# Reject symlink destinations before writing fixed config paths (Panel.qml:94-109,259-282).
+_refuse_symlink_dest() {
+  local dest="$1"
+  local dir
+  dir=$(dirname "$dest")
+  if [[ -L "$dest" || -L "$dir" ]]; then
+    echo "refusing symlink dest: $dest or $dir" >&2
+    return 1
+  fi
+}
+_safe_write() {
+  local dest="$1"
+  _refuse_symlink_dest "$dest" || return 1
+  local tmp
+  tmp=$(mktemp "$dest.tmp.XXXXXX") || return 1
+  cat > "$tmp" || { rm -f "$tmp"; return 1; }
+  if [[ -L "$dest" ]]; then rm -f "$tmp"; echo "refusing symlink (race): $dest" >&2; return 1; fi
+  mv -f "$tmp" "$dest"
+}
+
 migrate_config() {
   # One-time migration from the old in-plugin-folder location.
   if [[ ! -f "$CONFIG_FILE" && -f "$LEGACY_CONFIG_FILE" ]]; then
-    cp "$LEGACY_CONFIG_FILE" "$CONFIG_FILE" 2>/dev/null || true
+    if _refuse_symlink_dest "$CONFIG_FILE"; then
+      local tmp
+      tmp=$(mktemp "$CONFIG_FILE.tmp.XXXXXX") && cp -- "$LEGACY_CONFIG_FILE" "$tmp" 2>/dev/null && { if [[ -L "$CONFIG_FILE" ]]; then rm -f "$tmp"; else mv -f "$tmp" "$CONFIG_FILE"; fi; } || rm -f "$tmp"
+    fi
   fi
 }
 
@@ -39,12 +62,12 @@ JSON
 ensure_config() {
   migrate_config
   if [[ ! -f "$CONFIG_FILE" ]]; then
-    default_config >"$CONFIG_FILE"
+    _refuse_symlink_dest "$CONFIG_FILE" && default_config | _safe_write "$CONFIG_FILE" || true
   fi
   # Validate json; if invalid, backup and reset
   if ! jq empty "$CONFIG_FILE" 2>/dev/null; then
     cp "$CONFIG_FILE" "$CONFIG_FILE.bak.$(date +%s)" 2>/dev/null || true
-    default_config >"$CONFIG_FILE"
+    _refuse_symlink_dest "$CONFIG_FILE" && default_config | _safe_write "$CONFIG_FILE" || true
   fi
 }
 
@@ -394,8 +417,10 @@ cmd_launch_all() {
 
   # Boot log for diagnostics
   local boot_log="$STATE_DIR/launch-$boot_id.log"
-  : > "$boot_log" 2>/dev/null || true
-  echo "$(date -u) boot_id=$boot_id assignments=$count force=$force" >> "$boot_log" 2>/dev/null || true
+  if _refuse_symlink_dest "$boot_log"; then
+    : > "$boot_log" 2>/dev/null || true
+    echo "$(date -u) boot_id=$boot_id assignments=$count force=$force" >> "$boot_log" 2>/dev/null || true
+  fi
 
   # Iterate enabled assignments
   local idx=0
@@ -482,7 +507,9 @@ cmd_launch_all() {
   done
 
   # record boot id on success
-  echo "$boot_id" > "$last_boot_file"
+  if _refuse_symlink_dest "$last_boot_file"; then
+    tmp=$(mktemp "$last_boot_file.tmp.XXXXXX") && printf '%s' "$boot_id" > "$tmp" && { if [[ -L "$last_boot_file" ]]; then rm -f "$tmp"; else mv -f "$tmp" "$last_boot_file"; fi; } || rm -f "$tmp"
+  fi
   echo "done"
 }
 
@@ -541,7 +568,13 @@ cmd_set_workspace_layout() {
   esac
   local dir="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/workspace-layouts"
   mkdir -p "$dir"
-  printf 'hl.workspace_rule({ workspace = "%s", layout = "%s" })\n' "$ws" "$layout" >"$dir/$ws.lua"
+  local dest="$dir/$ws.lua"
+  if _refuse_symlink_dest "$dest"; then
+    local tmp
+    tmp=$(mktemp "$dest.tmp.XXXXXX") && printf 'hl.workspace_rule({ workspace = "%s", layout = "%s" })\n' "$ws" "$layout" > "$tmp" && { if [[ -L "$dest" ]]; then rm -f "$tmp"; echo "refusing symlink (race): $dest" >&2; else mv -f "$tmp" "$dest"; fi; } || rm -f "$tmp"
+  else
+    echo "refusing symlink dest: $dest" >&2; return 1
+  fi
   hyprctl eval "hl.workspace_rule({ workspace = \"$ws\", layout = \"$layout\" })" >/dev/null 2>&1 || \
     hyprctl keyword workspace "$ws, layout:$layout"
 }
