@@ -48,19 +48,26 @@ BarWidget {
 
     Process {
         id: statusProc
-        command: ["bash", "-c", "cat \"$1\" 2>/dev/null | jq -c '{total: (.assignments|length), enabled: ([.assignments[]|select(.enabled==true)]|length), pluginEnabled: (.settings.enabled // true)}' 2>/dev/null || echo '{\"total\":0,\"enabled\":0,\"pluginEnabled\":true}'", "_", root.configFile]
+        command: ["/usr/bin/bash", "-c", "if [[ -L \"$1\" ]]; then echo '{\"total\":0,\"enabled\":0,\"pluginEnabled\":true}' >&2; exit 1; fi; sz=$(/usr/bin/stat -c%s \"$1\" 2>/dev/null || echo 0); if [[ \"$sz\" -gt 1048576 ]]; then echo '{\"total\":0,\"enabled\":0,\"pluginEnabled\":true}'; exit 0; fi; cat \"$1\" 2>/dev/null | /usr/bin/head -c 1048576 | /usr/bin/jq -c '{total: (.assignments|length), enabled: ([.assignments[]|select(.enabled==true)]|length), pluginEnabled: (.settings.enabled // true)}' 2>/dev/null || echo '{\"total\":0,\"enabled\":0,\"pluginEnabled\":true}'", "_", root.configFile]
         property string out: ""
-        stdout: SplitParser { onRead: function(d){ statusProc.out += d } }
+        // bound output accumulation to 32k
+        property int outBytes: 0
+        stdout: SplitParser { onRead: function(d){ if (statusProc.outBytes < 32768) { statusProc.out += d; statusProc.outBytes += d.length; if (statusProc.outBytes > 32768) statusProc.out = statusProc.out.slice(0, 32768) } } }
+        onRunningChanged: if (running) statusWatchdog.restart(); else statusWatchdog.stop()
         onExited: function(code){
+            statusWatchdog.stop()
             try {
                 var j = JSON.parse(statusProc.out.trim() || "{}")
-                root.totalCount = Number(j.total || 0)
-                root.enabledCount = Number(j.enabled || 0)
+                root.totalCount = Math.min(100, Number(j.total || 0))
+                root.enabledCount = Math.min(100, Number(j.enabled || 0))
                 root.pluginEnabled = j.pluginEnabled !== false
             } catch(e) {}
             statusProc.out = ""
+            statusProc.outBytes = 0
         }
     }
+
+    Timer { id: statusWatchdog; interval: 8000; repeat: false; onTriggered: if (statusProc.running) statusProc.running = false }
 
     Process {
         id: watcherProc

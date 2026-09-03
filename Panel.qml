@@ -105,7 +105,7 @@ Panel {
         config=cfg; assignments=cfg.assignments.slice()
         saveProc.pendingJson = JSON.stringify(cfg,null,2)
         if (saveProc.running) { saveProc.wantsSave = true; return }
-        saveProc.command=["bash","-c","dir=\"$(dirname \"$1\")\"; mkdir -p \"$dir\"; if [[ -L \"$1\" || -L \"$dir\" ]]; then echo \"refusing symlink: $1\" >&2; exit 1; fi; tmp=\"$1.tmp.$$\"; printf '%s' \"$2\" > \"$tmp\" || exit 1; if [[ -L \"$1\" ]]; then rm -f \"$tmp\"; echo \"refusing symlink (race): $1\" >&2; exit 1; fi; mv -f \"$tmp\" \"$1\"; cat \"$1\" | jq empty && echo OK || echo FAIL", "_", root.configFile, saveProc.pendingJson]
+        saveProc.command=["/usr/bin/bash","-c","dir=\"$(dirname \"$1\")\"; if [[ -L \"$1\" || -L \"$dir\" ]]; then echo \"refusing symlink: $1\" >&2; exit 1; fi; mkdir -p \"$dir\"; if [[ -L \"$dir\" ]]; then echo \"refusing symlink (race): $dir\" >&2; exit 1; fi; if [[ $(/usr/bin/stat -c%s \"$1\" 2>/dev/null || echo 0) -gt 1048576 && -f \"$1\" ]]; then echo \"refusing oversized config\" >&2; exit 1; fi; tmp=$(/usr/bin/mktemp \"$1.tmp.XXXXXX\") || exit 1; trap 'rm -f \"$tmp\"' EXIT; printf '%s' \"$2\" > \"$tmp\" || exit 1; if [[ -L \"$1\" ]]; then rm -f \"$tmp\"; echo \"refusing symlink (race): $1\" >&2; exit 1; fi; mv -f \"$tmp\" \"$1\"; trap - EXIT; /usr/bin/head -c 1048576 \"$1\" | /usr/bin/jq empty && echo OK || echo FAIL", "_", root.configFile, saveProc.pendingJson]
         saveProc.running=true
     }
     function addAssignment() {
@@ -258,34 +258,45 @@ Panel {
 
     Process {
         id: loadProc
-        command: ["bash", "-c", "dir=\"$(dirname \"$1\")\"; mkdir -p \"$dir\"; if [[ -L \"$1\" || -L \"$dir\" ]]; then echo \"refusing symlink: $1\" >&2; exit 1; fi; if [[ ! -f \"$1\" && -f \"$3\" ]]; then if [[ -L \"$3\" ]]; then echo \"refusing symlink source: $3\" >&2; exit 1; fi; tmp=\"$1.tmp.$$\"; cp -- \"$3\" \"$tmp\" || exit 1; if [[ -L \"$1\" ]]; then rm -f \"$tmp\"; echo \"refusing symlink (race): $1\" >&2; exit 1; fi; mv -f \"$tmp\" \"$1\"; fi; if [[ ! -f \"$1\" ]]; then tmp=\"$1.tmp.$$\"; printf '%s' '{\"version\":1,\"settings\":{\"enabled\":true,\"launchDelayMs\":800,\"staggerMs\":400,\"silent\":true,\"onlyOnBoot\":true,\"lastFormWorkspace\":1},\"assignments\":[]}' > \"$tmp\" || exit 1; if [[ -L \"$1\" ]]; then rm -f \"$tmp\"; echo \"refusing symlink (race): $1\" >&2; exit 1; fi; mv -f \"$tmp\" \"$1\"; fi; cat \"$1\"", "_", root.configFile, "", root.legacyConfigFile]
+        onRunningChanged: if (running) loadWatchdog.restart(); else loadWatchdog.stop()
+        command: ["/usr/bin/bash", "-c", "dir=\"$(dirname \"$1\")\"; if [[ -L \"$1\" || -L \"$dir\" ]]; then echo \"refusing symlink: $1\" >&2; exit 1; fi; mkdir -p \"$dir\"; if [[ -L \"$dir\" ]]; then echo \"refusing symlink (race): $dir\" >&2; exit 1; fi; if [[ ! -f \"$1\" && -f \"$3\" ]]; then if [[ -L \"$3\" ]]; then echo \"refusing symlink source: $3\" >&2; exit 1; fi; if [[ $(/usr/bin/stat -c%s \"$3\" 2>/dev/null || echo 0) -gt 1048576 ]]; then echo \"refusing oversized legacy config\" >&2; exit 1; fi; tmp=$(/usr/bin/mktemp \"$1.tmp.XXXXXX\") || exit 1; cp -- \"$3\" \"$tmp\" || { rm -f \"$tmp\"; exit 1; }; if [[ -L \"$1\" ]]; then rm -f \"$tmp\"; echo \"refusing symlink (race): $1\" >&2; exit 1; fi; mv -f \"$tmp\" \"$1\"; fi; if [[ ! -f \"$1\" ]]; then tmp=$(/usr/bin/mktemp \"$1.tmp.XXXXXX\") || exit 1; trap 'rm -f \"$tmp\"' EXIT; printf '%s' '{\"version\":1,\"settings\":{\"enabled\":true,\"launchDelayMs\":800,\"staggerMs\":400,\"silent\":true,\"onlyOnBoot\":true,\"lastFormWorkspace\":1},\"assignments\":[]}' > \"$tmp\" || exit 1; if [[ -L \"$1\" ]]; then rm -f \"$tmp\"; echo \"refusing symlink (race): $1\" >&2; exit 1; fi; mv -f \"$tmp\" \"$1\"; trap - EXIT; fi; if [[ $(/usr/bin/stat -c%s \"$1\" 2>/dev/null || echo 0) -gt 1048576 ]]; then echo \"config too large\" >&2; exit 1; fi; /usr/bin/head -c 1048576 \"$1\"", "_", root.configFile, "", root.legacyConfigFile]
         stdout: StdioCollector { id: loadOut; waitForEnd: true }
         stderr: StdioCollector { id: loadErr; waitForEnd: true }
         onExited: function(code){
+            loadWatchdog.stop()
             root.loading=false; var txt=loadOut.text||""
+            if (txt.length > 1048576) { root.errorText="Config too large"; txt = txt.slice(0, 1048576) }
             if(code!==0){ root.errorText="Failed to load config ("+code+")"; return}
             try{ var j=JSON.parse(txt); var sane=Model.sanitizeConfig(j); root.config=sane; root.assignments=sane.assignments.slice(); root.formWorkspace=sane.settings.lastFormWorkspace; root.countsChanged() }catch(e){ root.errorText="Invalid config JSON: "+e}
         }
     }
     Process {
         id: saveProc
+        onRunningChanged: if (running) saveWatchdog.restart(); else saveWatchdog.stop()
         property string pendingJson: ""
         property bool wantsSave: false
         stdout: StdioCollector { id: saveOut; waitForEnd: true }
         stderr: StdioCollector { id: saveErr; waitForEnd: true }
         onExited: function(code){
+            saveWatchdog.stop()
             if(code!==0){ root.errorText="Save failed ("+code+"): "+(saveErr.text||""); }
             else root.errorText=""
             if (saveProc.wantsSave) {
                 saveProc.wantsSave=false
-                saveProc.command=["bash","-c","dir=\"$(dirname \"$1\")\"; mkdir -p \"$dir\"; if [[ -L \"$1\" || -L \"$dir\" ]]; then echo \"refusing symlink: $1\" >&2; exit 1; fi; tmp=\"$1.tmp.$$\"; printf '%s' \"$2\" > \"$tmp\" || exit 1; if [[ -L \"$1\" ]]; then rm -f \"$tmp\"; echo \"refusing symlink (race): $1\" >&2; exit 1; fi; mv -f \"$tmp\" \"$1\"; cat \"$1\" | jq empty && echo OK || echo FAIL", "_", root.configFile, saveProc.pendingJson]
+                saveProc.command=["/usr/bin/bash","-c","dir=\"$(dirname \"$1\")\"; if [[ -L \"$1\" || -L \"$dir\" ]]; then echo \"refusing symlink: $1\" >&2; exit 1; fi; mkdir -p \"$dir\"; if [[ -L \"$dir\" ]]; then echo \"refusing symlink (race): $dir\" >&2; exit 1; fi; if [[ $(/usr/bin/stat -c%s \"$1\" 2>/dev/null || echo 0) -gt 1048576 && -f \"$1\" ]]; then echo \"refusing oversized config\" >&2; exit 1; fi; tmp=$(/usr/bin/mktemp \"$1.tmp.XXXXXX\") || exit 1; trap 'rm -f \"$tmp\"' EXIT; printf '%s' \"$2\" > \"$tmp\" || exit 1; if [[ -L \"$1\" ]]; then rm -f \"$tmp\"; echo \"refusing symlink (race): $1\" >&2; exit 1; fi; mv -f \"$tmp\" \"$1\"; trap - EXIT; /usr/bin/head -c 1048576 \"$1\" | /usr/bin/jq empty && echo OK || echo FAIL", "_", root.configFile, saveProc.pendingJson]
                 saveProc.running=true
             } else if (code===0) {
                 root.countsChanged(); refreshServiceProc.running=true
             }
         }
     }
-    Process { id: refreshServiceProc; command: ["bash","-c","omarchy-shell -q tenzin.auto-workspace refreshConfig >/dev/null 2>&1 || true"] }
+    Process { id: refreshServiceProc; command: ["/usr/bin/bash","-c","omarchy-shell -q tenzin.auto-workspace refreshConfig >/dev/null 2>&1 || true"] }
+    // ---- watchdogs: hard deadlines for every Process ----
+    Timer { id: loadWatchdog; interval: 10000; repeat: false; onTriggered: if (loadProc.running) { root.errorText = "Load timeout"; loadProc.running = false } }
+    Timer { id: saveWatchdog; interval: 10000; repeat: false; onTriggered: if (saveProc.running) { root.errorText = "Save timeout"; saveProc.running = false } }
+    Timer { id: layoutWatchdog; interval: 10000; repeat: false; onTriggered: if (layoutProc.running) layoutProc.running = false }
+    Timer { id: layoutToggleWatchdog; interval: 10000; repeat: false; onTriggered: if (layoutToggleProc.running) layoutToggleProc.running = false }
+    Timer { id: appsWatchdog; interval: 15000; repeat: false; onTriggered: if (appsProc.running) appsProc.running = false }
     function parseWorkspaceLayouts(s) {
         var out = {}
         if (!s) return out
@@ -303,8 +314,10 @@ Panel {
     }
     Process {
         id: layoutProc
+        onRunningChanged: if (running) layoutWatchdog.restart(); else layoutWatchdog.stop()
+
         // Global options plus per-workspace tiledLayout (and Super+L persist files).
-        command: ["bash", root.script, "--hypr-facts"]
+        command: ["/usr/bin/bash", root.script, "--hypr-facts"]
         stdout: StdioCollector { id: layoutOut; waitForEnd: true }
         onExited: function(code) {
             if (code !== 0) return
@@ -328,6 +341,8 @@ Panel {
     // Switch the selected workspace's layout (same persist path as Super+L).
     Process {
         id: layoutToggleProc
+        onRunningChanged: if (running) layoutToggleWatchdog.restart(); else layoutToggleWatchdog.stop()
+
         stdout: StdioCollector { waitForEnd: true }
         stderr: StdioCollector { id: layoutToggleErr; waitForEnd: true }
         onExited: function(code) {
@@ -349,14 +364,16 @@ Panel {
         map[String(ws)] = target
         root.workspaceLayouts = map
         statusText = "WS" + ws + " → " + target
-        layoutToggleProc.command = ["bash", root.script, "--set-workspace-layout", String(ws), target]
+        layoutToggleProc.command = ["/usr/bin/bash", root.script, "--set-workspace-layout", String(ws), target]
         layoutToggleProc.running = true
     }
     // Keep layout facts fresh while the panel is visible
     Timer { id: layoutRefreshTimer; interval: 5000; repeat: true; running: root.opened; onTriggered: if (!layoutProc.running) layoutProc.running = true }
     Process {
         id: appsProc
-        command: ["bash", root.script, "--list-apps"]
+        onRunningChanged: if (running) appsWatchdog.restart(); else appsWatchdog.stop()
+
+        command: ["/usr/bin/bash", root.script, "--list-apps"]
         stdout: StdioCollector { id: appsOut; waitForEnd: true }
         onExited: function(code){
             if(code!==0) return
@@ -485,6 +502,7 @@ Panel {
                     iconComponent: Component {
                         Text {
                             text: "󱂬"
+                            textFormat: Text.PlainText
                             color: Color.accent
                             font.family: Style.font.family
                             font.pixelSize: Style.font.display
@@ -494,6 +512,7 @@ Panel {
 
                 Text {
                     text: "↑↓ navigate · Enter toggles · / searches · Esc closes"
+                    textFormat: Text.PlainText
                     color: root.dim
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.caption
@@ -608,6 +627,7 @@ Panel {
                             visible: root.filteredApps.length===0 && root.appFilter.trim().length>0
                             Layout.fillWidth: true
                             text: "No matches"
+                            textFormat: Text.PlainText
                             color: root.dim
                             font.family: root.fontFamily
                             font.pixelSize: Style.font.caption
@@ -617,6 +637,7 @@ Panel {
                             visible: root.filteredApps.length===0 && root.appFilter.trim().length===0
                             Layout.fillWidth: true
                             text: "No apps assigned yet — type to search and add"
+                            textFormat: Text.PlainText
                             color: root.dim
                             font.family: root.fontFamily
                             font.pixelSize: Style.font.caption
@@ -701,6 +722,7 @@ Panel {
                             Layout.fillWidth: true
                             wrapMode: Text.WordWrap
                             text: (root.hyprLayout === "scrolling"
+                            textFormat: Text.PlainText
                                   ? "WS" + root.formWorkspace + " scrolling: windows sit side-by-side (" + Math.round(root.hyprColumnWidth*100) + "% cols) — scroll horizontally to see all " + root.addedApps.length + "."
                                   : root.hyprLayout === "master"
                                   ? "WS" + root.formWorkspace + " master: left master + right stack."
@@ -722,6 +744,7 @@ Panel {
                     Text {
                         visible: root.statusText!==""
                         text: "✓ " + root.statusText
+                        textFormat: Text.PlainText
                         color: Color.accent
                         font.family: root.fontFamily
                         font.pixelSize: Style.font.caption
@@ -731,6 +754,7 @@ Panel {
                     Text {
                         visible: root.errorText!==""
                         text: root.errorText
+                        textFormat: Text.PlainText
                         color: Color.urgent || "#ff4444"
                         font.family: root.fontFamily
                         font.pixelSize: Style.font.caption
@@ -779,6 +803,7 @@ Panel {
                     anchors.centerIn: parent
                     visible: rowIcon.source === ""
                     text: "󰐱"
+                    textFormat: Text.PlainText
                     color: root.foreground
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.body
@@ -791,6 +816,7 @@ Panel {
 
                 Text {
                     text: app ? app.name : ""
+                    textFormat: Text.PlainText
                     color: root.foreground
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.body
@@ -799,6 +825,7 @@ Panel {
                 }
                 Text {
                     text: app ? (app.exec.indexOf("omarchy-launch-webapp") !== -1 ? "web app" : app.exec.split(" ")[0].split("/").pop()) : ""
+                    textFormat: Text.PlainText
                     color: root.dim
                     font.family: "monospace"
                     font.pixelSize: Style.font.caption - 2

@@ -35,14 +35,17 @@ Item {
     // ---- processes ----
     Process {
         id: ensureProc
-        command: ["bash", root.script, "--ensure-config"]
+        command: ["/usr/bin/bash", root.script, "--ensure-config"]
         stdout: StdioCollector { id: ensureOut; waitForEnd: true }
+        onRunningChanged: if (running) ensureWatchdog.restart(); else ensureWatchdog.stop()
         onExited: function(code) {
+            ensureWatchdog.stop()
             if (code !== 0) {
                 root.log("ensure-config failed: " + code)
                 return
             }
             var txt = ensureOut.text || ""
+            if (txt.length > 1048576) { root.log("ensure-config output too large (" + txt.length + "), truncating"); txt = txt.slice(0, 1048576) }
             try {
                 var cfg = JSON.parse(txt)
                 if (cfg.settings) {
@@ -66,7 +69,9 @@ Item {
         id: launchProc
         stdout: SplitParser { onRead: function(d){ console.log("[auto-workspace launch] " + d) } }
         stderr: SplitParser { onRead: function(d){ console.warn("[auto-workspace launch err] " + d) } }
+        onRunningChanged: if (running) launchWatchdog.restart(); else launchWatchdog.stop()
         onExited: function(code) {
+            launchWatchdog.stop()
             root.lastStatus = code === 0 ? "launched" : "failed:" + code
             root.launchedThisSession = true
             root.log("launch-all exited " + code)
@@ -76,8 +81,12 @@ Item {
     Process {
         id: statusProc
         stdout: StdioCollector { id: statusOut; waitForEnd: true }
+        onRunningChanged: if (running) statusWatchdog.restart(); else statusWatchdog.stop()
         onExited: function(code) {
-            if (code === 0) root.lastStatus = statusOut.text
+            statusWatchdog.stop()
+            var txt = statusOut.text || ""
+            if (txt.length > 1048576) txt = txt.slice(0, 1048576)
+            if (code === 0) root.lastStatus = txt
         }
     }
 
@@ -85,7 +94,15 @@ Item {
         id: manualLaunchProc
         stdout: SplitParser { onRead: function(d){ console.log("[auto-workspace manual] " + d) } }
         stderr: SplitParser { onRead: function(d){ console.warn("[auto-workspace manual err] " + d) } }
+        onRunningChanged: if (running) manualWatchdog.restart(); else manualWatchdog.stop()
+        onExited: function(code) { manualWatchdog.stop() }
     }
+
+    // ---- watchdogs: hard wall-clock deadlines ----
+    Timer { id: ensureWatchdog; interval: 15000; repeat: false; onTriggered: { if (ensureProc.running) { root.log("ensure-config timeout, terminating"); ensureProc.running = false } } }
+    Timer { id: launchWatchdog; interval: 120000; repeat: false; onTriggered: { if (launchProc.running) { root.log("launch-all timeout, terminating"); launchProc.running = false } } }
+    Timer { id: statusWatchdog; interval: 10000; repeat: false; onTriggered: { if (statusProc.running) { root.log("status timeout, terminating"); statusProc.running = false } } }
+    Timer { id: manualWatchdog; interval: 30000; repeat: false; onTriggered: { if (manualLaunchProc.running) { root.log("manual launch timeout, terminating"); manualLaunchProc.running = false } } }
 
     Timer {
         id: launchTimer
@@ -101,37 +118,42 @@ Item {
                 return
             }
             root.log("auto-launching assignments...")
-            launchProc.command = ["bash", root.script, "--launch-all"]
+            launchProc.command = ["/usr/bin/bash", root.script, "--launch-all"]
             launchProc.running = true
         }
     }
 
     // public API for Panel / IPC
     function launchAll(force) {
-        var args = force ? ["bash", root.script, "--launch-all", "true"] : ["bash", root.script, "--launch-all"]
-        // force needs different path: script expects --launch-all true for force, but we have helper
+        // force needs different path: script expects --force-launch-all
         if (force) {
-            launchProc.command = ["bash", root.script, "--force-launch-all"]
+            launchProc.command = ["/usr/bin/bash", root.script, "--force-launch-all"]
         } else {
-            launchProc.command = ["bash", root.script, "--launch-all"]
+            launchProc.command = ["/usr/bin/bash", root.script, "--launch-all"]
         }
         launchProc.running = true
     }
 
     function launchOnWorkspace(workspace, execCmd) {
+        var ws = String(workspace)
+        if (!(ws.match(/^[0-9]+$/) || ws.indexOf("special:") === 0)) {
+            root.log("launchOnWorkspace: invalid workspace " + ws)
+            return
+        }
+        var cmd = String(execCmd || "").slice(0, 500)
+        if (!cmd.length) { root.log("launchOnWorkspace: empty exec"); return }
         var silent = "true"
-        // read silent from config quickly via status? assume true
-        manualLaunchProc.command = ["bash", root.script, "--launch", String(workspace), execCmd, silent]
+        manualLaunchProc.command = ["/usr/bin/bash", root.script, "--launch", ws, cmd, silent]
         manualLaunchProc.running = true
     }
 
     function refreshConfig() {
-        ensureProc.running = true
+        if (!ensureProc.running) ensureProc.running = true
     }
 
     function status(): string {
         // synchronous-ish via cached lastStatus + immediate proc trigger for next call
-        if (!statusProc.running) statusProc.command = ["bash", root.script, "--status"]
+        if (!statusProc.running) statusProc.command = ["/usr/bin/bash", root.script, "--status"]
         if (!statusProc.running) statusProc.running = true
         try {
             var cached = statusProc.running ? root.lastStatus : root.lastStatus

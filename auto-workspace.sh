@@ -1,6 +1,13 @@
 #!/bin/bash
 set -uo pipefail
 
+# Absolute binary paths (F-06)
+_BASH="/usr/bin/bash"
+_JQ="/usr/bin/jq"
+_HYPRCTL="/usr/bin/hyprctl"
+if [[ ! -x "$_JQ" ]]; then _JQ="$(command -v jq 2>/dev/null || echo jq)"; fi
+if [[ ! -x "$_HYPRCTL" ]]; then _HYPRCTL="$(command -v hyprctl 2>/dev/null || echo hyprctl)"; fi
+
 PLUGIN_ID="tenzin.auto-workspace"
 # Config lives OUTSIDE the plugin dir: the shell watches the plugin folder and
 # reloads the whole plugin on any file change there, which would close the
@@ -10,7 +17,11 @@ CONFIG_FILE="$STATE_DIR/config.json"
 LEGACY_CONFIG_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/plugins/$PLUGIN_ID/config.json"
 STATE_FILE="$STATE_DIR/state.json"
 
+# Validate state dir not a symlink before creation (F-05)
+if [[ -L "$STATE_DIR" ]]; then echo "refusing symlink state dir: $STATE_DIR" >&2; exit 1; fi
 mkdir -p "$STATE_DIR"
+if [[ -L "$STATE_DIR" ]]; then echo "refusing symlink state dir (race): $STATE_DIR" >&2; exit 1; fi
+chmod 700 "$STATE_DIR" 2>/dev/null || true
 
 # Reject symlink destinations before writing fixed config paths (Panel.qml:94-109,259-282).
 _refuse_symlink_dest() {
@@ -64,8 +75,14 @@ ensure_config() {
   if [[ ! -f "$CONFIG_FILE" ]]; then
     _refuse_symlink_dest "$CONFIG_FILE" && default_config | _safe_write "$CONFIG_FILE" || true
   fi
+  # Size bound before parsing (F-02): reject oversized files
+  if [[ $(stat -c%s "$CONFIG_FILE" 2>/dev/null || echo 0) -gt 1048576 ]]; then
+    echo "config too large, resetting" >&2
+    cp "$CONFIG_FILE" "$CONFIG_FILE.bak.$(date +%s)" 2>/dev/null || true
+    _refuse_symlink_dest "$CONFIG_FILE" && default_config | _safe_write "$CONFIG_FILE" || true
+  fi
   # Validate json; if invalid, backup and reset
-  if ! jq empty "$CONFIG_FILE" 2>/dev/null; then
+  if ! "$_JQ" empty "$CONFIG_FILE" 2>/dev/null; then
     cp "$CONFIG_FILE" "$CONFIG_FILE.bak.$(date +%s)" 2>/dev/null || true
     _refuse_symlink_dest "$CONFIG_FILE" && default_config | _safe_write "$CONFIG_FILE" || true
   fi
@@ -162,10 +179,10 @@ cmd_list_apps() {
 cmd_status() {
   ensure_config
   local count enabled_count
-  count=$(jq '.assignments | length' "$CONFIG_FILE" 2>/dev/null || echo 0)
+  count=$("$_JQ" '.assignments | length' "$CONFIG_FILE" 2>/dev/null || echo 0)
   enabled_count=$(jq '[.assignments[] | select(.enabled==true)] | length' "$CONFIG_FILE" 2>/dev/null || echo 0)
   local enabled
-  enabled=$(jq -r '.settings.enabled // true' "$CONFIG_FILE" 2>/dev/null)
+  enabled=$("$_JQ" -r '.settings.enabled // true' "$CONFIG_FILE" 2>/dev/null)
   cat <<EOF
 {
   "configFile": "$CONFIG_FILE",
@@ -179,7 +196,7 @@ EOF
 
 wait_for_hyprland() {
   local timeout=20 tries=0
-  while ! hyprctl -j version >/dev/null 2>&1; do
+  while ! "$_HYPRCTL" -j version >/dev/null 2>&1; do
     tries=$((tries+1))
     if [[ $tries -ge $timeout ]]; then
       echo "hyprctl not ready after ${timeout}s, aborting launch" >&2
@@ -254,12 +271,12 @@ cmd_launch() {
 
   # Snapshot ALL client addresses BEFORE launching — so we can detect windows created by THIS exec
   local before
-  before=$(hyprctl clients -j 2>/dev/null | jq -r '.[].address' 2>/dev/null | sort -u | tr '\n' ' ')
+  before=$("$_HYPRCTL" clients -j 2>/dev/null | "$_JQ" -r '.[].address' 2>/dev/null | sort -u | tr '\n' ' ')
 
   # Try hl.exec_cmd first (canonical in helpers.lua), then hl.dsp.exec_cmd, then legacy dispatch.
-  if ! hyprctl eval "hl.exec_cmd(\"$lua_escaped\")" >/dev/null 2>&1 \
-    && ! hyprctl eval "hl.dsp.exec_cmd(\"$lua_escaped\")" >/dev/null 2>&1 \
-    && ! hyprctl dispatch exec "$dispatch_cmd" >/dev/null 2>&1; then
+  if ! "$_HYPRCTL" eval "hl.exec_cmd(\"$lua_escaped\")" >/dev/null 2>&1 \
+    && ! "$_HYPRCTL" eval "hl.dsp.exec_cmd(\"$lua_escaped\")" >/dev/null 2>&1 \
+    && ! "$_HYPRCTL" dispatch exec "$dispatch_cmd" >/dev/null 2>&1; then
     echo "failed to execute launch command on workspace $workspace: $final_cmd" >&2
     return 1
   fi
@@ -272,7 +289,7 @@ cmd_launch() {
   local tries=40
   for _try in $(seq 1 $tries); do
     local now_addrs new_addrs moved=0
-    now_addrs=$(hyprctl clients -j 2>/dev/null | jq -r '.[].address' 2>/dev/null | sort -u)
+    now_addrs=$("$_HYPRCTL" clients -j 2>/dev/null | "$_JQ" -r '.[].address' 2>/dev/null | sort -u)
     # comm needs sorted inputs: compute new addresses = now - before
     new_addrs=$(comm -13 <(printf '%s' "$before" | tr ' ' '\n' | sort -u) <(printf '%s' "$now_addrs" | tr ' ' '\n' | sort -u) 2>/dev/null)
     if [[ -n "$new_addrs" ]]; then
@@ -280,7 +297,7 @@ cmd_launch() {
         [[ -z "$addr" ]] && continue
         # Filter by expected class — only move windows belonging to this launch
         local cls
-        cls=$(hyprctl clients -j 2>/dev/null | jq -r --arg a "$addr" '.[] | select(.address==$a) | .class' 2>/dev/null)
+        cls=$("$_HYPRCTL" clients -j 2>/dev/null | "$_JQ" -r --arg a "$addr" '.[] | select(.address==$a) | .class' 2>/dev/null)
         if [[ "$is_browser_like" == "true" ]]; then
           # browser launches should only move chromium/chrome app windows
           if ! [[ "$cls" =~ chrome|chromium ]] && ! [[ "${cls,,}" =~ chrome|chromium ]]; then
@@ -294,7 +311,7 @@ cmd_launch() {
         fi
         # Skip if already on the right workspace
         local on_ws
-        on_ws=$(hyprctl clients -j 2>/dev/null | jq -r --arg a "$addr" --arg ws "$target_ws" '
+        on_ws=$("$_HYPRCTL" clients -j 2>/dev/null | "$_JQ" -r --arg a "$addr" --arg ws "$target_ws" '
           def ws_ok($ws):
             if ($ws|test("^[0-9]+$")) then
               (.workspace.id == ($ws|tonumber) or .workspace.name == $ws)
@@ -304,7 +321,7 @@ cmd_launch() {
           .[] | select(.address == $a) | ws_ok($ws)
         ' 2>/dev/null)
         if [[ "$on_ws" != "true" ]]; then
-          hyprctl eval "hl.dispatch(hl.dsp.window.move({workspace=\"$target_ws\", window=\"address:$addr\", follow=false}))" >/dev/null 2>&1 \
+          "$_HYPRCTL" eval "hl.dispatch(hl.dsp.window.move({workspace=\"$target_ws\", window=\"address:$addr\", follow=false}))" >/dev/null 2>&1 \
             || true
         fi
         moved=$((moved+1))
@@ -324,13 +341,13 @@ cmd_launch() {
       sleep 2.5
       for _bg in $(seq 1 20); do
         local now2 new2 m2=0
-        now2=$(hyprctl clients -j 2>/dev/null | jq -r '.[].address' 2>/dev/null | sort -u)
+        now2=$("$_HYPRCTL" clients -j 2>/dev/null | "$_JQ" -r '.[].address' 2>/dev/null | sort -u)
         new2=$(comm -13 <(printf '%s' "$before" | tr ' ' '\n' | sort -u) <(printf '%s' "$now2" | tr ' ' '\n' | sort -u) 2>/dev/null)
         if [[ -n "$new2" ]]; then
           while IFS= read -r addr; do
             [[ -z "$addr" ]] && continue
             local cls2
-            cls2=$(hyprctl clients -j 2>/dev/null | jq -r --arg a "$addr" '.[] | select(.address==$a) | .class' 2>/dev/null)
+            cls2=$("$_HYPRCTL" clients -j 2>/dev/null | "$_JQ" -r --arg a "$addr" '.[] | select(.address==$a) | .class' 2>/dev/null)
             if [[ "$is_browser_like" == "true" ]]; then
               if ! [[ "$cls2" =~ chrome|chromium ]] && ! [[ "${cls2,,}" =~ chrome|chromium ]]; then
                 continue
@@ -341,7 +358,7 @@ cmd_launch() {
               fi
             fi
             local on_ws2
-            on_ws2=$(hyprctl clients -j 2>/dev/null | jq -r --arg a "$addr" --arg ws "$target_ws" '
+            on_ws2=$("$_HYPRCTL" clients -j 2>/dev/null | "$_JQ" -r --arg a "$addr" --arg ws "$target_ws" '
               def ws_ok($ws):
                 if ($ws|test("^[0-9]+$")) then
                   (.workspace.id == ($ws|tonumber) or .workspace.name == $ws)
@@ -351,7 +368,7 @@ cmd_launch() {
               .[] | select(.address == $a) | ws_ok($ws)
             ' 2>/dev/null)
             if [[ "$on_ws2" != "true" ]]; then
-              hyprctl eval "hl.dispatch(hl.dsp.window.move({workspace=\"$target_ws\", window=\"address:$addr\", follow=false}))" >/dev/null 2>&1 \
+              "$_HYPRCTL" eval "hl.dispatch(hl.dsp.window.move({workspace=\"$target_ws\", window=\"address:$addr\", follow=false}))" >/dev/null 2>&1 \
                 || true
               m2=$((m2+1))
             fi
@@ -386,7 +403,7 @@ cmd_launch_all() {
   local force="${1:-false}"
   ensure_config
   local enabled
-  enabled=$(jq -r '.settings.enabled // true' "$CONFIG_FILE")
+  enabled=$("$_JQ" -r '.settings.enabled // true' "$CONFIG_FILE")
   if [[ "$enabled" != "true" && "$force" != "true" ]]; then
     echo "plugin disabled, skipping (use --force to override)" >&2
     exit 0
@@ -397,7 +414,7 @@ cmd_launch_all() {
 
   # boot_id for per-item once-per-boot gating (type-based defaults handled in Model.js)
   local only_on_boot_global
-  only_on_boot_global=$(jq -r '.settings.onlyOnBoot // true' "$CONFIG_FILE")
+  only_on_boot_global=$("$_JQ" -r '.settings.onlyOnBoot // true' "$CONFIG_FILE")
   local boot_id
   boot_id=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || echo "unknown")
   local last_boot_file="$STATE_DIR/last_boot_id"
@@ -405,11 +422,11 @@ cmd_launch_all() {
   [[ -f "$last_boot_file" ]] && last_boot=$(cat "$last_boot_file" 2>/dev/null || echo "")
 
   local stagger silent
-  stagger=$(jq -r '.settings.staggerMs // 400' "$CONFIG_FILE")
-  silent=$(jq -r '.settings.silent // true' "$CONFIG_FILE")
+  stagger=$("$_JQ" -r '.settings.staggerMs // 400' "$CONFIG_FILE")
+  silent=$("$_JQ" -r '.settings.silent // true' "$CONFIG_FILE")
 
   local count
-  count=$(jq '.assignments | length' "$CONFIG_FILE")
+  count=$("$_JQ" '.assignments | length' "$CONFIG_FILE")
   if [[ "$count" -eq 0 ]]; then
     echo "no assignments configured"
     exit 0
@@ -426,10 +443,10 @@ cmd_launch_all() {
   local idx=0
   jq -c '.assignments[] | select(.enabled==true)' "$CONFIG_FILE" 2>/dev/null | while read -r item; do
     local ws exec_cmd name type
-    ws=$(echo "$item" | jq -r '.workspace')
-    exec_cmd=$(echo "$item" | jq -r '.exec // .command // empty')
-    name=$(echo "$item" | jq -r '.name // empty')
-    type=$(echo "$item" | jq -r '.type // "app"')
+    ws=$(echo "$item" | "$_JQ" -r '.workspace')
+    exec_cmd=$(echo "$item" | "$_JQ" -r '.exec // .command // empty')
+    name=$(echo "$item" | "$_JQ" -r '.name // empty')
+    type=$(echo "$item" | "$_JQ" -r '.type // "app"')
     if [[ -z "$ws" || -z "$exec_cmd" ]]; then
       echo "skip invalid item: $item" >&2
       continue
@@ -437,7 +454,7 @@ cmd_launch_all() {
 
     # Per-item once-per-boot (type default: webapp true, app false, custom true via Model.js)
     local item_only
-    item_only=$(echo "$item" | jq -r 'if has("onlyOnBoot") then .onlyOnBoot else empty end')
+    item_only=$(echo "$item" | "$_JQ" -r 'if has("onlyOnBoot") then .onlyOnBoot else empty end')
     if [[ -z "$item_only" || "$item_only" == "null" ]]; then
       item_only=$(default_only_on_boot_for_type "$type")
       [[ -z "$item_only" ]] && item_only="$only_on_boot_global"
@@ -463,7 +480,7 @@ cmd_launch_all() {
       if [[ "$exec_cmd" == omarchy-launch-webapp* || "$exec_cmd" == chromium* || "$exec_cmd" == google-chrome* || "$exec_cmd" == firefox* ]]; then
         :
       elif [[ -n "$app_id" ]]; then
-        if hyprctl clients -j 2>/dev/null | jq -e --arg ws "$ws" --arg appid "$app_id" '
+        if "$_HYPRCTL" clients -j 2>/dev/null | "$_JQ" -e --arg ws "$ws" --arg appid "$app_id" '
           def ws_ok($ws):
             if ($ws|test("^[0-9]+$")) then
               (.workspace.id == ($ws|tonumber) or .workspace.name == $ws)
@@ -476,7 +493,7 @@ cmd_launch_all() {
           continue
         fi
       elif [[ -n "$basename" && "$basename" != "." ]]; then
-        if hyprctl clients -j 2>/dev/null | jq -e --arg ws "$ws" --arg bn "$basename" '
+        if "$_HYPRCTL" clients -j 2>/dev/null | "$_JQ" -e --arg ws "$ws" --arg bn "$basename" '
           def ws_ok($ws):
             if ($ws|test("^[0-9]+$")) then
               (.workspace.id == ($ws|tonumber) or .workspace.name == $ws)
@@ -517,16 +534,16 @@ cmd_launch_all() {
 # (id:layout,...), matching Super+L / omarchy-hyprland-workspace-layout-toggle.
 cmd_hypr_facts() {
   local L C GI GO B R MF S MW MH
-  L=$(hyprctl getoption general:layout -j 2>/dev/null | jq -r '.str // empty')
-  C=$(hyprctl getoption scrolling:column_width -j 2>/dev/null | jq -r '.float // 0.49')
-  GI=$(hyprctl getoption general:gaps_in -j 2>/dev/null | jq -r '(.css // "5") | split(" ")[0] | (tonumber? // 5)')
-  GO=$(hyprctl getoption general:gaps_out -j 2>/dev/null | jq -r '(.css // "10") | split(" ")[0] | (tonumber? // 10)')
-  B=$(hyprctl getoption general:border_size -j 2>/dev/null | jq -r '.int // 2')
-  R=$(hyprctl getoption decoration:rounding -j 2>/dev/null | jq -r '.int // 0')
-  MF=$(hyprctl getoption master:mfact -j 2>/dev/null | jq -r '.float // 0.55')
-  S=$(hyprctl monitors -j 2>/dev/null | jq -r '([.[] | select(.focused == true)][0] // .[0] // {}).scale // 1')
-  MW=$(hyprctl monitors -j 2>/dev/null | jq -r '([.[] | select(.focused == true)][0] // .[0] // {}).width // 1920')
-  MH=$(hyprctl monitors -j 2>/dev/null | jq -r '([.[] | select(.focused == true)][0] // .[0] // {}).height // 1080')
+  L=$("$_HYPRCTL" getoption general:layout -j 2>/dev/null | "$_JQ" -r '.str // empty')
+  C=$("$_HYPRCTL" getoption scrolling:column_width -j 2>/dev/null | "$_JQ" -r '.float // 0.49')
+  GI=$("$_HYPRCTL" getoption general:gaps_in -j 2>/dev/null | "$_JQ" -r '(.css // "5") | split(" ")[0] | (tonumber? // 5)')
+  GO=$("$_HYPRCTL" getoption general:gaps_out -j 2>/dev/null | "$_JQ" -r '(.css // "10") | split(" ")[0] | (tonumber? // 10)')
+  B=$("$_HYPRCTL" getoption general:border_size -j 2>/dev/null | "$_JQ" -r '.int // 2')
+  R=$("$_HYPRCTL" getoption decoration:rounding -j 2>/dev/null | "$_JQ" -r '.int // 0')
+  MF=$("$_HYPRCTL" getoption master:mfact -j 2>/dev/null | "$_JQ" -r '.float // 0.55')
+  S=$("$_HYPRCTL" monitors -j 2>/dev/null | "$_JQ" -r '([.[] | select(.focused == true)][0] // .[0] // {}).scale // 1')
+  MW=$("$_HYPRCTL" monitors -j 2>/dev/null | "$_JQ" -r '([.[] | select(.focused == true)][0] // .[0] // {}).width // 1920')
+  MH=$("$_HYPRCTL" monitors -j 2>/dev/null | "$_JQ" -r '([.[] | select(.focused == true)][0] // .[0] // {}).height // 1080')
 
   local -A layouts=()
   local dir="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/workspace-layouts"
@@ -542,7 +559,7 @@ cmd_hypr_facts() {
   fi
   while IFS=: read -r id lay; do
     [[ -n $id && -n $lay && $lay != "null" ]] && layouts[$id]=$lay
-  done < <(hyprctl workspaces -j 2>/dev/null | jq -r '.[] | select(.id > 0) | "\(.id):\(.tiledLayout // empty)"')
+  done < <("$_HYPRCTL" workspaces -j 2>/dev/null | "$_JQ" -r '.[] | select(.id > 0) | "\(.id):\(.tiledLayout // empty)"')
 
   local ws_pairs=""
   for id in "${!layouts[@]}"; do
@@ -567,7 +584,10 @@ cmd_set_workspace_layout() {
     *) echo "invalid layout: $layout" >&2; exit 1 ;;
   esac
   local dir="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/workspace-layouts"
+  if [[ -L "$dir" ]]; then echo "refusing symlink dir: $dir" >&2; return 1; fi
   mkdir -p "$dir"
+  if [[ -L "$dir" ]]; then echo "refusing symlink dir (race): $dir" >&2; return 1; fi
+  chmod 700 "$dir" 2>/dev/null || true
   local dest="$dir/$ws.lua"
   if _refuse_symlink_dest "$dest"; then
     local tmp
@@ -575,8 +595,8 @@ cmd_set_workspace_layout() {
   else
     echo "refusing symlink dest: $dest" >&2; return 1
   fi
-  hyprctl eval "hl.workspace_rule({ workspace = \"$ws\", layout = \"$layout\" })" >/dev/null 2>&1 || \
-    hyprctl keyword workspace "$ws, layout:$layout"
+  "$_HYPRCTL" eval "hl.workspace_rule({ workspace = \"$ws\", layout = \"$layout\" })" >/dev/null 2>&1 || \
+    "$_HYPRCTL" keyword workspace "$ws, layout:$layout"
 }
 
 case "${1:-}" in

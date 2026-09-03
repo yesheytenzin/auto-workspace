@@ -221,6 +221,7 @@ Item {
             spacing: 6
             Text {
                 text: "WS " + root.workspace
+                textFormat: Text.PlainText
                 color: Color.foreground
                 font.family: Style.font.family
                 font.pixelSize: Style.font.caption
@@ -228,6 +229,7 @@ Item {
             }
             Text {
                 text: root.assignedApps.length + " app" + (root.assignedApps.length === 1 ? "" : "s")
+                textFormat: Text.PlainText
                 color: Qt.darker(Color.foreground, 1.3)
                 font.family: Style.font.family
                 font.pixelSize: Style.font.caption - 1
@@ -235,6 +237,7 @@ Item {
             Text {
                 visible: root.assignedApps.length > 0
                 text: "· " + root.layoutLabel
+                textFormat: Text.PlainText
                 color: Qt.darker(Color.foreground, 1.6)
                 font.family: Style.font.family
                 font.pixelSize: Style.font.caption - 2
@@ -267,6 +270,7 @@ Item {
                 visible: root.assignedApps.length === 0
                 anchors.centerIn: parent
                 text: "Empty — use + Add to assign apps"
+                textFormat: Text.PlainText
                 color: Qt.darker(Color.foreground, 1.4)
                 font.family: Style.font.family
                 font.pixelSize: Style.font.caption - 1
@@ -349,6 +353,7 @@ Item {
                                         Text {
                                             Layout.fillWidth: true
                                             text: modelData.name || "App"
+                                            textFormat: Text.PlainText
                                             color: modelData.enabled ? Color.foreground : Qt.darker(Color.foreground, 1.3)
                                             font.family: Style.font.family
                                             font.pixelSize: Style.font.caption - 1
@@ -369,6 +374,7 @@ Item {
                         anchors.verticalCenter: parent.verticalCenter
                         anchors.rightMargin: 2
                         text: "›"
+                        textFormat: Text.PlainText
                         color: Qt.rgba(Color.foreground.r, Color.foreground.g, Color.foreground.b, 0.45)
                         font.pixelSize: 14
                         font.bold: true
@@ -428,6 +434,7 @@ Item {
                                     Text {
                                         Layout.fillWidth: true
                                         text: modelData.app.name || "App"
+                                        textFormat: Text.PlainText
                                         color: modelData.app.enabled ? Color.foreground : Qt.darker(Color.foreground, 1.3)
                                         font.family: Style.font.family
                                         font.pixelSize: Style.font.caption - 1
@@ -471,6 +478,7 @@ Item {
                         }
                         Text {
                             text: root.dragApp ? (root.dragApp.name || "App") : ""
+                            textFormat: Text.PlainText
                             color: Color.foreground
                             font.family: Style.font.family
                             font.pixelSize: Style.font.caption - 1
