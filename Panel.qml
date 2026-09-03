@@ -69,7 +69,7 @@ Panel {
     property int selectedRow: 0
     property int selectedButton: 0
 
-    readonly property color foreground: Color.popups.text
+    readonly property color foreground: Color.foreground
     readonly property color dim: Qt.rgba(foreground.r, foreground.g, foreground.b, 0.55)
     readonly property string fontFamily: Style.font.family
 
@@ -501,8 +501,8 @@ Panel {
                     fontFamily: root.fontFamily
                     iconComponent: Component {
                         Text {
-                            text: "󱂬"
                             textFormat: Text.PlainText
+                            text: "󱂬"
                             color: Color.accent
                             font.family: Style.font.family
                             font.pixelSize: Style.font.display
@@ -511,8 +511,8 @@ Panel {
                 }
 
                 Text {
-                    text: "↑↓ navigate · Enter toggles · / searches · Esc closes"
                     textFormat: Text.PlainText
+                    text: "↑↓ navigate · Enter toggles · / searches · Esc closes"
                     color: root.dim
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.caption
@@ -624,20 +624,20 @@ Panel {
                         }
 
                         Text {
+                            textFormat: Text.PlainText
                             visible: root.filteredApps.length===0 && root.appFilter.trim().length>0
                             Layout.fillWidth: true
                             text: "No matches"
-                            textFormat: Text.PlainText
                             color: root.dim
                             font.family: root.fontFamily
                             font.pixelSize: Style.font.caption
                         }
 
                         Text {
+                            textFormat: Text.PlainText
                             visible: root.filteredApps.length===0 && root.appFilter.trim().length===0
                             Layout.fillWidth: true
                             text: "No apps assigned yet — type to search and add"
-                            textFormat: Text.PlainText
                             color: root.dim
                             font.family: root.fontFamily
                             font.pixelSize: Style.font.caption
@@ -719,10 +719,10 @@ Panel {
                             onMoveApp: function(fromIdx, toIdx) { root.reorderAssignment(root.formWorkspace, fromIdx, toIdx) }
                         }
                         Text {
+                            textFormat: Text.PlainText
                             Layout.fillWidth: true
                             wrapMode: Text.WordWrap
                             text: (root.hyprLayout === "scrolling"
-                            textFormat: Text.PlainText
                                   ? "WS" + root.formWorkspace + " scrolling: windows sit side-by-side (" + Math.round(root.hyprColumnWidth*100) + "% cols) — scroll horizontally to see all " + root.addedApps.length + "."
                                   : root.hyprLayout === "master"
                                   ? "WS" + root.formWorkspace + " master: left master + right stack."
@@ -742,9 +742,9 @@ Panel {
                     spacing: Style.space(12)
 
                     Text {
+                        textFormat: Text.PlainText
                         visible: root.statusText!==""
                         text: "✓ " + root.statusText
-                        textFormat: Text.PlainText
                         color: Color.accent
                         font.family: root.fontFamily
                         font.pixelSize: Style.font.caption
@@ -752,9 +752,9 @@ Panel {
                         Layout.fillWidth: true
                     }
                     Text {
+                        textFormat: Text.PlainText
                         visible: root.errorText!==""
                         text: root.errorText
-                        textFormat: Text.PlainText
                         color: Color.urgent || "#ff4444"
                         font.family: root.fontFamily
                         font.pixelSize: Style.font.caption
@@ -800,10 +800,10 @@ Panel {
                     onStatusChanged: if (status === Image.Error) source = ""
                 }
                 Text {
+                    textFormat: Text.PlainText
                     anchors.centerIn: parent
                     visible: rowIcon.source === ""
                     text: "󰐱"
-                    textFormat: Text.PlainText
                     color: root.foreground
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.body
@@ -815,8 +815,8 @@ Panel {
                 spacing: 1
 
                 Text {
-                    text: app ? app.name : ""
                     textFormat: Text.PlainText
+                    text: app ? app.name : ""
                     color: root.foreground
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.body
@@ -824,8 +824,8 @@ Panel {
                     Layout.fillWidth: true
                 }
                 Text {
-                    text: app ? (app.exec.indexOf("omarchy-launch-webapp") !== -1 ? "web app" : app.exec.split(" ")[0].split("/").pop()) : ""
                     textFormat: Text.PlainText
+                    text: app ? (app.exec.indexOf("omarchy-launch-webapp") !== -1 ? "web app" : app.exec.split(" ")[0].split("/").pop()) : ""
                     color: root.dim
                     font.family: "monospace"
                     font.pixelSize: Style.font.caption - 2
