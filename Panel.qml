@@ -69,8 +69,8 @@ Panel {
     property int selectedRow: 0
     property int selectedButton: 0
 
-    readonly property color foreground: root.barForeground
-    readonly property color dim: Qt.rgba(root.barForeground.r, root.barForeground.g, root.barForeground.b, 0.55)
+    readonly property color foreground: Color.popups.text
+    readonly property color dim: Qt.rgba(foreground.r, foreground.g, foreground.b, 0.55)
     readonly property string fontFamily: Style.font.family
 
     readonly property int totalCount: assignments.length
