@@ -220,24 +220,24 @@ Item {
             Layout.fillWidth: true
             spacing: 6
             Text {
-                text: "WS " + root.workspace
                 textFormat: Text.PlainText
+                text: "WS " + root.workspace
                 color: Color.foreground
                 font.family: Style.font.family
                 font.pixelSize: Style.font.caption
                 font.bold: true
             }
             Text {
-                text: root.assignedApps.length + " app" + (root.assignedApps.length === 1 ? "" : "s")
                 textFormat: Text.PlainText
+                text: root.assignedApps.length + " app" + (root.assignedApps.length === 1 ? "" : "s")
                 color: Qt.darker(Color.foreground, 1.3)
                 font.family: Style.font.family
                 font.pixelSize: Style.font.caption - 1
             }
             Text {
+                textFormat: Text.PlainText
                 visible: root.assignedApps.length > 0
                 text: "· " + root.layoutLabel
-                textFormat: Text.PlainText
                 color: Qt.darker(Color.foreground, 1.6)
                 font.family: Style.font.family
                 font.pixelSize: Style.font.caption - 2
@@ -267,10 +267,10 @@ Item {
 
             // Empty state
             Text {
+                textFormat: Text.PlainText
                 visible: root.assignedApps.length === 0
                 anchors.centerIn: parent
                 text: "Empty — use + Add to assign apps"
-                textFormat: Text.PlainText
                 color: Qt.darker(Color.foreground, 1.4)
                 font.family: Style.font.family
                 font.pixelSize: Style.font.caption - 1
@@ -351,9 +351,9 @@ Item {
                                             onStatusChanged: if (status === Image.Error) source = ""
                                         }
                                         Text {
+                                            textFormat: Text.PlainText
                                             Layout.fillWidth: true
                                             text: modelData.name || "App"
-                                            textFormat: Text.PlainText
                                             color: modelData.enabled ? Color.foreground : Qt.darker(Color.foreground, 1.3)
                                             font.family: Style.font.family
                                             font.pixelSize: Style.font.caption - 1
@@ -369,12 +369,12 @@ Item {
                     }
                     // scroll hint arrow when the newest column runs off the right edge
                     Text {
+                        textFormat: Text.PlainText
                         visible: tilesContainer.count > 0 && scrollingStrip.colX(tilesContainer.count - 1) + scrollingStrip.colW > tilesContainer.width + 1
                         anchors.right: parent.right
                         anchors.verticalCenter: parent.verticalCenter
                         anchors.rightMargin: 2
                         text: "›"
-                        textFormat: Text.PlainText
                         color: Qt.rgba(Color.foreground.r, Color.foreground.g, Color.foreground.b, 0.45)
                         font.pixelSize: 14
                         font.bold: true
@@ -432,9 +432,9 @@ Item {
                                         onStatusChanged: if (status === Image.Error) source = ""
                                     }
                                     Text {
+                                        textFormat: Text.PlainText
                                         Layout.fillWidth: true
                                         text: modelData.app.name || "App"
-                                        textFormat: Text.PlainText
                                         color: modelData.app.enabled ? Color.foreground : Qt.darker(Color.foreground, 1.3)
                                         font.family: Style.font.family
                                         font.pixelSize: Style.font.caption - 1
@@ -477,8 +477,8 @@ Item {
                             cache: true
                         }
                         Text {
-                            text: root.dragApp ? (root.dragApp.name || "App") : ""
                             textFormat: Text.PlainText
+                            text: root.dragApp ? (root.dragApp.name || "App") : ""
                             color: Color.foreground
                             font.family: Style.font.family
                             font.pixelSize: Style.font.caption - 1
